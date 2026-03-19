@@ -121,6 +121,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   const rellenandoRef = useRef(false);
   const ultimoRefillRef = useRef(0);
   const wasPlayingRef = useRef(false);
+  const stoppedManuallyRef = useRef(false);
 
   // Mantener refs sincronizados
   useEffect(() => { queueRef.current = queue; }, [queue]);
@@ -313,6 +314,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
 
       await youtubePlay(url, vol, video);
 
+      stoppedManuallyRef.current = false;
       setSearching(false);
       setIsPlaying(true);
       setCurrentSong({ ...song, thumbnail: thumb });
@@ -402,6 +404,8 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
 
   const stop = useCallback(() => {
     log('Reproduccion detenida');
+    stoppedManuallyRef.current = true;
+    wasPlayingRef.current = false;
     playerStop().catch(() => {});
     setIsPlaying(false);
     setCurrentSong(null);
@@ -651,12 +655,16 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
 
         // Detectar transicion: estaba reproduciendo y ahora no
         if (wasPlayingRef.current && !playing) {
-          log('Cancion terminada, avanzando...');
-          setIsPlaying(false);
-          setCurrentSong(null);
-          // Solo avanzar si estamos en modo auto
-          if (configRef.current.autoMode) {
-            setTimeout(() => reproducirSiguiente(), 500);
+          if (stoppedManuallyRef.current) {
+            // Fue un stop/pause deliberado, no avanzar
+            stoppedManuallyRef.current = false;
+          } else {
+            log('Cancion terminada, avanzando...');
+            setIsPlaying(false);
+            setCurrentSong(null);
+            if (configRef.current.autoMode) {
+              setTimeout(() => reproducirSiguiente(), 500);
+            }
           }
         }
 
@@ -737,7 +745,11 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
             }
           }
           // Marcar acciones como procesadas
-          await apiPost('mark_queue_actions', { ids });
+          try {
+            await apiPost('mark_queue_actions', { ids });
+          } catch (err) {
+            log(`Error marcando acciones: ${err}`);
+          }
         }
       } catch {
         // No critico
