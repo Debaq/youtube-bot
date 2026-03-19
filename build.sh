@@ -66,13 +66,10 @@ ARGS=(
     --hidden-import=groq
     --hidden-import=yt_dlp
     --hidden-import=bs4
-    --hidden-import=dotenv
     --hidden-import=requests
     --hidden-import=tkinter
     --collect-all=groq
     --collect-all=yt_dlp
-    # Incluir .env.example como referencia
-    --add-data=".env.example:."
 )
 
 # Icono (solo si existe)
@@ -82,24 +79,11 @@ fi
 
 # Separador de ruta en --add-data: ; en Windows, : en Linux/Mac
 if [ "$OS" = "windows" ]; then
-    # Reemplazar : por ; en --add-data para Windows
-    FIXED_ARGS=()
-    for arg in "${ARGS[@]}"; do
-        if [[ "$arg" == *".env.example:"* ]]; then
-            FIXED_ARGS+=("${arg/:/;}")
-        else
-            FIXED_ARGS+=("$arg")
-        fi
-    done
-    ARGS=("${FIXED_ARGS[@]}")
 fi
 
 echo ""
 echo "Ejecutando PyInstaller..."
 pyinstaller "${ARGS[@]}" "$ENTRY"
-
-# Copiar .env.example al directorio de salida
-cp .env.example "dist/$APP_NAME/"
 
 echo ""
 echo "=== Build completo ==="
@@ -112,7 +96,4 @@ else
     echo "  dist/$APP_NAME/$APP_NAME"
 fi
 echo ""
-echo "IMPORTANTE: El usuario necesita tener instalado:"
-echo "  - mpv (https://mpv.io) o VLC"
-echo "  - ffmpeg (https://ffmpeg.org)"
-echo "  - Un archivo .env con las credenciales (copiar .env.example)"
+echo "NOTA: Se necesita mpv instalado en el sistema"
