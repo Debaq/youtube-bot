@@ -1,7 +1,7 @@
 <?php
 session_start();
 
-define('API_KEY', 'lab3d_rpi');
+define('API_KEY', getenv('MUSICBOT_API_KEY') ?: 'cambiar_esta_clave');
 define('DB_PATH', __DIR__ . '/db/musicbot.sqlite');
 
 function db() {

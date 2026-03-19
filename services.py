@@ -224,15 +224,15 @@ class MusicPlayer:
                     os.unlink(self._ipc_path)
                 except OSError:
                     pass
+            vid_val = "auto" if self.video else "no"
             args = [
                 self._player_cmd,
                 "--really-quiet",
                 f"--volume={vol}",
+                f"--vid={vid_val}",
                 f"--input-ipc-server={self._ipc_path}",
                 url,
             ]
-            if not self.video:
-                args.insert(1, "--no-video")
         else:
             # VLC
             args = [self._player_cmd, "--play-and-exit",
@@ -310,6 +310,11 @@ class MusicPlayer:
         """Activa/desactiva mute."""
         self._muted = muted
         self._send_player_command("volume", 0 if muted else self._volume)
+
+    def set_video(self, enabled):
+        """Activa/desactiva video en caliente."""
+        self.video = enabled
+        self._send_player_command("vid", "auto" if enabled else "no")
 
     def detener(self):
         """Detiene la reproducción actual."""

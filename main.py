@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import random
 import threading
 import tkinter as tk
@@ -71,6 +72,16 @@ ENDOFDAY_HOUR = 20      # Hora de generar playlist del día (20 = 8 PM)
 # Comandos reconocidos desde solicitudes de usuarios
 COMANDOS_SIGUIENTE = {"u", "siguiente", "next", "skip", "s", "otra", "cambia", "cambiale"}
 COMANDOS_PARAR = {"para", "stop", "parar", "detener", "pause", "pausa", "callate", "silencio"}
+
+# Patrones para detección de solicitudes directas (bypass Groq)
+PATRON_DIRECTO = re.compile(
+    r'^(?:pon(?:me|er|gan)?(?:\s+la\s+de)?|reproduce|echale|dale|quiero\s+(?:escuchar|oir))\s+(.+)',
+    re.IGNORECASE
+)
+
+PALABRAS_VAGAS = {"algo", "música", "musica", "tipo", "estilo", "ambiente",
+                  "como", "parecido", "similar", "para", "genero", "género",
+                  "tranquilo", "movido", "relajado", "alegre", "triste"}
 
 # Presets de ambiente para el DJ
 DJ_PRESETS = {
@@ -510,9 +521,9 @@ class MusicBotApp:
         self.root.after(0, lambda: self._set_status(msg))
 
     def _toggle_video(self):
-        self.player.video = self.show_video.get()
+        self.player.set_video(self.show_video.get())
         state = "con video" if self.player.video else "solo audio"
-        self._set_status(f"Modo: {state} (aplica en la siguiente cancion)")
+        self._set_status(f"Modo: {state}")
 
     def _abrir_brave(self):
         url = self.url_var.get().strip()
@@ -538,6 +549,47 @@ class MusicBotApp:
             else:
                 restantes.append(s)
         return restantes
+
+    def _extraer_solicitudes_directas(self, solicitudes):
+        """Separa solicitudes directas (bypass Groq) de las que necesitan IA."""
+        directas = []
+        para_groq = []
+        for s in solicitudes:
+            texto = s.get("texto", "").strip()
+            texto_limpio = texto.strip("!¡¿? .,")
+            query = None
+
+            # 1. Comando explícito: "pon X", "ponme X", "quiero escuchar X", etc.
+            match = PATRON_DIRECTO.match(texto_limpio)
+            if match:
+                query = match.group(1).strip()
+            # 2. Solicitud corta sin palabras vagas → búsqueda directa
+            elif len(texto_limpio.split()) <= 5:
+                palabras = set(texto_limpio.lower().split())
+                if not palabras & PALABRAS_VAGAS:
+                    query = texto_limpio
+
+            if query:
+                titulo, artista = query, "?"
+                # Parsear "X de Y" (artista al final)
+                parts = re.split(r'\s+de\s+', query, maxsplit=1, flags=re.IGNORECASE)
+                if len(parts) == 2:
+                    titulo, artista = parts[0].strip(), parts[1].strip()
+                else:
+                    # Parsear "Artista - Canción" o "Artista – Canción"
+                    parts = re.split(r'\s*[-–]\s*', query, maxsplit=1)
+                    if len(parts) == 2:
+                        artista, titulo = parts[0].strip(), parts[1].strip()
+                directas.append({
+                    "titulo": titulo,
+                    "artista": artista,
+                    "razon": "Pedido directo",
+                    "solicitado_por": s.get("email", ""),
+                    "priority": s.get("priority", "normal"),
+                })
+            else:
+                para_groq.append(s)
+        return directas, para_groq
 
     # ── Cola ─────────────────────────────────────────────────────────
 
@@ -795,17 +847,23 @@ class MusicBotApp:
                     # Detectar y ejecutar comandos, quedarnos solo con solicitudes reales
                     solicitudes_reales = self._detectar_y_ejecutar_comandos(solicitudes)
 
-                    # Procesar solicitudes reales con Groq
-                    if solicitudes_reales and self.groq:
-                        resultado = self.groq.sugerir_musica("", solicitudes_reales)
+                    # Separar solicitudes directas de las que necesitan IA
+                    directas, para_groq = self._extraer_solicitudes_directas(solicitudes_reales)
+                    if directas:
+                        self._set_status_safe(f"{len(directas)} pedido(s) directo(s) detectado(s)")
+                        self.root.after(0, self._agregar_a_cola, directas)
+
+                    # Solo el resto va a Groq
+                    if para_groq and self.groq:
+                        resultado = self.groq.sugerir_musica("", para_groq)
                         canciones = resultado.get("canciones", [])
 
                         if canciones:
-                            has_now = any(s.get("priority") == "now" for s in solicitudes_reales)
+                            has_now = any(s.get("priority") == "now" for s in para_groq)
                             for c in canciones:
                                 if has_now:
                                     c["priority"] = "now"
-                                c["solicitado_por"] = solicitudes_reales[0].get("email", "")
+                                c["solicitado_por"] = para_groq[0].get("email", "")
 
                             # Las canciones con priority=now van directo a la cola
                             ahora = [c for c in canciones if c.get("priority") == "now"]
@@ -935,16 +993,25 @@ class MusicBotApp:
                     self._set_status_safe("Solo se recibieron comandos")
                     return
 
-                self._set_status_safe("Consultando IA...")
-                resultado = self.groq.sugerir_musica("", solicitudes_reales)
-                canciones = resultado.get("canciones", [])
+                # Separar solicitudes directas de las que necesitan IA
+                directas, para_groq = self._extraer_solicitudes_directas(solicitudes_reales)
+                if directas:
+                    self.root.after(0, self._agregar_a_cola, directas)
+                    self._set_status_safe(f"{len(directas)} pedido(s) directo(s) agregado(s)")
 
-                if canciones:
-                    for c in canciones:
-                        c["solicitado_por"] = solicitudes_reales[0].get("email", "")
-                    self.root.after(0, self._agregar_a_cola, canciones)
-                    self._set_status_safe(f"{len(canciones)} canciones agregadas a la cola")
-                else:
+                if para_groq:
+                    self._set_status_safe("Consultando IA...")
+                    resultado = self.groq.sugerir_musica("", para_groq)
+                    canciones = resultado.get("canciones", [])
+
+                    if canciones:
+                        for c in canciones:
+                            c["solicitado_por"] = para_groq[0].get("email", "")
+                        self.root.after(0, self._agregar_a_cola, canciones)
+                        self._set_status_safe(f"{len(canciones)} canciones agregadas a la cola")
+                    else:
+                        self._set_status_safe("La IA no generó sugerencias")
+                elif not directas:
                     self._set_status_safe("La IA no generó sugerencias")
 
             except Exception as e:
@@ -1134,7 +1201,7 @@ class MusicBotApp:
                     self.player.set_mute(vol_data.get("muted", False))
                     web_video = vol_data.get("video", False)
                     if web_video != self.player.video:
-                        self.player.video = web_video
+                        self.player.set_video(web_video)
                         self.root.after(0, lambda: self.show_video.set(web_video))
                     # Sincronizar preset desde la web
                     web_preset = vol_data.get("preset", "")
