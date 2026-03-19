@@ -17,6 +17,7 @@ import type { GroqMessage } from '../api';
 
 const POLL_MS = 15_000;
 const PLAYCHECK_MS = 3_000;
+const SYNC_MS = 30_000;
 const BUFFER_MIN = 5;
 const BUFFER_TARGET = 15;
 const REFILL_COOLDOWN_MS = 60_000;
@@ -321,7 +322,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
         const resp = await apiPost<NowPlayingResponse>('now_playing', {
           title: song.titulo,
           artist: song.artista,
-          youtube_url: url,
+          url: url,
           requested_by: song.solicitado_por || '',
           thumbnail_url: thumb,
         });
@@ -673,6 +674,79 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
     const interval = setInterval(check, PLAYCHECK_MS);
     return () => clearInterval(interval);
   }, [log, reproducirSiguiente]);
+
+  // ── Sync cola al servidor + leer acciones web cada SYNC_MS ──
+
+  useEffect(() => {
+    if (!config.autoMode) return;
+
+    const sync = async () => {
+      try {
+        // 1. Sincronizar cola y buffer al servidor (para que la web los vea)
+        await apiPost('sync_queue', {
+          queue: queueRef.current.map((s) => ({
+            titulo: s.titulo,
+            artista: s.artista,
+            razon: s.razon,
+            priority: s.priority,
+            solicitado_por: s.solicitado_por,
+            thumbnail_url: s.thumbnail,
+          })),
+          buffer: bufferRef.current.map((s) => ({
+            titulo: s.titulo,
+            artista: s.artista,
+            razon: s.razon,
+            priority: s.priority,
+            solicitado_por: s.solicitado_por,
+            thumbnail_url: s.thumbnail,
+          })),
+        });
+
+        // 2. Leer acciones pendientes de la web (skip, pause, remove, etc.)
+        const acciones = await apiGet<Array<{ id: number; action: string; data: string }>>('pending_queue_actions');
+        if (acciones && acciones.length > 0) {
+          const ids: number[] = [];
+          for (const a of acciones) {
+            ids.push(a.id);
+            let data: Record<string, unknown> = {};
+            try { data = JSON.parse(a.data || '{}'); } catch { /* ignore */ }
+
+            if (a.action === 'skip') {
+              log('Web pidió skip');
+              skip();
+            } else if (a.action === 'pause') {
+              log('Web pidió pause');
+              stop();
+            } else if (a.action === 'remove') {
+              const pos = Number(data.position ?? -1);
+              const source = (data.source as string) || 'queue';
+              if (source === 'queue' && pos >= 0) {
+                removeFromQueue(pos);
+              } else if (source === 'buffer' && pos >= 0) {
+                setBuffer((prev) => prev.filter((_, i) => i !== pos));
+              }
+            } else if (a.action === 'clear') {
+              const source = (data.source as string) || 'queue';
+              if (source === 'buffer') {
+                setBuffer([]);
+                log('Web limpió buffer');
+              } else {
+                setQueue([]);
+                log('Web limpió cola');
+              }
+            }
+          }
+          // Marcar acciones como procesadas
+          await apiPost('mark_queue_actions', { ids });
+        }
+      } catch {
+        // No critico
+      }
+    };
+
+    const interval = setInterval(sync, SYNC_MS);
+    return () => clearInterval(interval);
+  }, [config.autoMode, skip, stop, removeFromQueue, log]);
 
   // ── Auto-rellenar cola cuando esta vacia ─────────────────────
 
