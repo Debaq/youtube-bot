@@ -3,12 +3,21 @@
 
 import json
 import os
+import platform
 import re
 import random
+import sys
 import threading
 import tkinter as tk
 from datetime import datetime, date
 from tkinter import ttk, messagebox
+
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
 
 from services import GroqService, WebScraper, MusicPlayer, PHPApiClient, WeatherService
 
@@ -20,6 +29,8 @@ CONFIG_DEFAULTS = {
     "groq_api_key": "",
     "groq_model": "llama-3.3-70b-versatile",
     "weather_city": "Valdivia",
+    "autostart": False,
+    "minimize_to_tray": True,
 }
 
 
@@ -176,6 +187,9 @@ class MusicBotApp:
         self._schedule = []  # Schedule programado
         self.auto_schedule = tk.BooleanVar(value=True)
         self.auto_mood = tk.BooleanVar(value=True)
+        self.autostart = tk.BooleanVar(value=self.cfg.get("autostart", False))
+        self.minimize_to_tray = tk.BooleanVar(value=self.cfg.get("minimize_to_tray", True))
+        self._tray_icon = None
 
         self._init_groq()
         self._crear_gui()
@@ -391,6 +405,16 @@ class MusicBotApp:
             frame, text="Animo", variable=self.auto_mood,
         ).pack(side=tk.LEFT, padx=(10, 0))
 
+        ttk.Checkbutton(
+            frame, text="Autostart", variable=self.autostart,
+            command=self._toggle_autostart
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Checkbutton(
+            frame, text="Tray", variable=self.minimize_to_tray,
+            command=self._toggle_tray_setting
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
         ttk.Button(frame, text="Config", command=self._abrir_config).pack(
             side=tk.RIGHT, padx=(0, 5)
         )
@@ -532,6 +556,125 @@ class MusicBotApp:
         if not url:
             return
         self.scraper.abrir_en_brave(url)
+
+    # ── Autostart y System Tray ─────────────────────────────────────
+
+    def _toggle_autostart(self):
+        enabled = self.autostart.get()
+        self.cfg["autostart"] = enabled
+        save_config(self.cfg)
+        if platform.system() == "Windows":
+            self._autostart_windows(enabled)
+        else:
+            self._autostart_linux(enabled)
+        self._set_status(f"Autostart {'activado' if enabled else 'desactivado'}")
+
+    def _autostart_linux(self, enabled):
+        autostart_dir = os.path.join(os.path.expanduser("~"), ".config", "autostart")
+        desktop_file = os.path.join(autostart_dir, "musicbot.desktop")
+        if enabled:
+            os.makedirs(autostart_dir, exist_ok=True)
+            script_path = os.path.abspath(__file__)
+            if getattr(sys, 'frozen', False):
+                exec_cmd = sys.executable
+            else:
+                exec_cmd = f"{sys.executable} {script_path}"
+            content = (
+                "[Desktop Entry]\n"
+                "Version=1.0\n"
+                "Type=Application\n"
+                "Name=Music Bot\n"
+                "Comment=Music Bot - DJ con IA\n"
+                f"Exec={exec_cmd}\n"
+                "Terminal=false\n"
+                "X-GNOME-Autostart-enabled=true\n"
+                "StartupNotify=false\n"
+            )
+            with open(desktop_file, "w") as f:
+                f.write(content)
+        else:
+            if os.path.isfile(desktop_file):
+                os.remove(desktop_file)
+
+    def _autostart_windows(self, enabled):
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                                 winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE)
+            app_name = "MusicBot"
+            if enabled:
+                if getattr(sys, 'frozen', False):
+                    exe_path = sys.executable
+                else:
+                    exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, exe_path)
+            else:
+                try:
+                    winreg.DeleteValue(key, app_name)
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception as e:
+            self._set_status(f"Error autostart Windows: {e}")
+
+    def _toggle_tray_setting(self):
+        self.cfg["minimize_to_tray"] = self.minimize_to_tray.get()
+        save_config(self.cfg)
+        self._set_status(f"Minimizar al tray {'activado' if self.minimize_to_tray.get() else 'desactivado'}")
+
+    def _crear_tray_icon_image(self):
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([4, 4, 60, 60], fill=(46, 125, 50, 255))
+        draw.ellipse([16, 34, 28, 46], fill=(255, 255, 255, 255))
+        draw.ellipse([36, 28, 48, 40], fill=(255, 255, 255, 255))
+        draw.line([(28, 38), (28, 16)], fill=(255, 255, 255, 255), width=2)
+        draw.line([(48, 32), (48, 10)], fill=(255, 255, 255, 255), width=2)
+        draw.line([(28, 16), (48, 10)], fill=(255, 255, 255, 255), width=2)
+        return img
+
+    def _minimizar_a_tray(self):
+        if HAS_TRAY:
+            self.root.withdraw()
+            if self._tray_icon is None:
+                try:
+                    image = self._crear_tray_icon_image()
+                    menu = pystray.Menu(
+                        pystray.MenuItem("Mostrar", self._restaurar_de_tray, default=True),
+                        pystray.MenuItem("Siguiente", lambda: self.root.after(0, self._siguiente)),
+                        pystray.MenuItem("Detener", lambda: self.root.after(0, self._detener_solo)),
+                        pystray.Menu.SEPARATOR,
+                        pystray.MenuItem("Salir", self._salir_definitivo),
+                    )
+                    self._tray_icon = pystray.Icon("MusicBot", image, "Music Bot", menu)
+                    threading.Thread(target=self._tray_icon.run, daemon=True).start()
+                except Exception:
+                    # Si falla el tray, fallback a minimizar
+                    self.root.deiconify()
+                    self.root.iconify()
+            else:
+                self._tray_icon.visible = True
+        else:
+            self.root.iconify()
+
+    def _restaurar_de_tray(self, icon=None, item=None):
+        if self._tray_icon:
+            self._tray_icon.visible = False
+        self.root.after(0, self._mostrar_ventana)
+
+    def _mostrar_ventana(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _salir_definitivo(self, icon=None, item=None):
+        if self._tray_icon:
+            self._tray_icon.stop()
+            self._tray_icon = None
+        self.auto_mode.set(False)
+        self.player.detener()
+        self.root.after(0, self.root.destroy)
 
     # ── Detección de comandos ────────────────────────────────────────
 
@@ -1452,9 +1595,15 @@ class MusicBotApp:
     # ── Cierre ───────────────────────────────────────────────────────
 
     def on_close(self):
-        self.auto_mode.set(False)
-        self.player.detener()
-        self.root.destroy()
+        if self.minimize_to_tray.get():
+            self._minimizar_a_tray()
+        else:
+            if self._tray_icon:
+                self._tray_icon.stop()
+                self._tray_icon = None
+            self.auto_mode.set(False)
+            self.player.detener()
+            self.root.destroy()
 
 
 def main():
