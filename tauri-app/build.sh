@@ -34,14 +34,30 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
+# Buscar puerto libre (rango 5100-5999)
+find_free_port() {
+    for port in $(seq 5100 5999); do
+        if ! ss -tlnp | grep -q ":${port} " 2>/dev/null; then
+            echo "$port"
+            return
+        fi
+    done
+    echo "5199"
+}
+
 MODE="${1:-build}"
 
 if [ "$MODE" = "dev" ]; then
+    PORT=$(find_free_port)
     echo ""
     echo "=== Modo desarrollo ==="
-    echo "Frontend: http://localhost:5173"
+    echo "Puerto: $PORT"
     echo ""
-    npx tauri dev
+
+    # Actualizar devUrl en tauri.conf.json
+    sed -i "s|\"devUrl\": \"http://localhost:[0-9]*\"|\"devUrl\": \"http://localhost:${PORT}\"|" src-tauri/tauri.conf.json
+
+    VITE_PORT=$PORT npx tauri dev
 else
     echo ""
     echo "Compilando producción..."
