@@ -81,7 +81,9 @@ PATRON_DIRECTO = re.compile(
 
 PALABRAS_VAGAS = {"algo", "música", "musica", "tipo", "estilo", "ambiente",
                   "como", "parecido", "similar", "para", "genero", "género",
-                  "tranquilo", "movido", "relajado", "alegre", "triste"}
+                  "tranquilo", "movido", "relajado", "alegre", "triste",
+                  "quiero", "necesito", "dame", "inspiración", "inspiracion",
+                  "recomienda", "recomendame", "sugiere", "sugiéreme"}
 
 # Presets de ambiente para el DJ
 DJ_PRESETS = {
@@ -586,6 +588,7 @@ class MusicBotApp:
                     "razon": "Pedido directo",
                     "solicitado_por": s.get("email", ""),
                     "priority": s.get("priority", "normal"),
+                    "texto_original": s.get("texto", ""),
                 })
             else:
                 para_groq.append(s)
@@ -613,6 +616,7 @@ class MusicBotApp:
                     "solicitado_por": c.get("solicitado_por", ""),
                     "priority": priority,
                     "thumbnail": c.get("thumbnail", ""),
+                    "texto_original": c.get("texto_original", ""),
                 }
                 if priority == "now":
                     self.cola.insert(0, entry)
@@ -1082,7 +1086,7 @@ class MusicBotApp:
 
     # ── Reproducción ─────────────────────────────────────────────────
 
-    def _reproducir_cancion(self, titulo, artista, solicitado_por="", thumbnail=""):
+    def _reproducir_cancion(self, titulo, artista, solicitado_por="", thumbnail="", texto_original=""):
         query = f"{titulo} {artista}"
         self._set_status(f"Buscando: {query}...")
         self.reproduciendo = True
@@ -1098,6 +1102,19 @@ class MusicBotApp:
                     return
 
                 resultados = self.player.buscar_youtube(query, max_results=1)
+                if not resultados and texto_original and self.groq:
+                    # Fallback: pedido directo falló en YouTube, reenviar a Groq
+                    self._set_status_safe(f"No encontrado directo, consultando IA: {texto_original}")
+                    solicitud_fallback = [{"texto": texto_original, "email": solicitado_por}]
+                    resultado = self.groq.sugerir_musica("", solicitud_fallback)
+                    canciones = resultado.get("canciones", [])
+                    if canciones:
+                        for c in canciones:
+                            c["solicitado_por"] = solicitado_por
+                        self.root.after(0, self._agregar_a_cola, canciones)
+                    self.reproduciendo = False
+                    self.root.after(0, self._reproducir_siguiente)
+                    return
                 if not resultados:
                     self._set_status_safe(f"No encontrado en YouTube: {query}")
                     self.reproduciendo = False
@@ -1166,6 +1183,7 @@ class MusicBotApp:
             siguiente["artista"],
             siguiente.get("solicitado_por", ""),
             siguiente.get("thumbnail", ""),
+            siguiente.get("texto_original", ""),
         )
 
     def _siguiente(self):
