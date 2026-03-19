@@ -124,6 +124,8 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   const ultimoRefillRef = useRef(0);
   const wasPlayingRef = useRef(false);
   const stoppedManuallyRef = useRef(false);
+  const reproducingLockRef = useRef(false); // Evita que múltiples reproducirSiguiente corran a la vez
+  const processedIdsRef = useRef(new Set<number>()); // IDs ya procesados para no repetir
 
   // Mantener refs sincronizados
   useEffect(() => { queueRef.current = queue; }, [queue]);
@@ -349,8 +351,10 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   // ── Reproducir siguiente de la cola ──────────────────────────
 
   const reproducirSiguiente = useCallback(async () => {
-    // Si ya esta buscando, no hacer nada
+    // Lock: solo una instancia puede correr a la vez
+    if (reproducingLockRef.current) return;
     if (searchingRef.current) return;
+    reproducingLockRef.current = true;
 
     let currentQueue = queueRef.current;
     let currentBuffer = bufferRef.current;
@@ -369,6 +373,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
       setCurrentSong(null);
       setIsPlaying(false);
       log('Cola vacia - esperando canciones');
+      reproducingLockRef.current = false;
       return;
     }
 
@@ -377,12 +382,12 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
     setQueue(restoCola);
 
     const exito = await reproducirCancion(siguiente);
+    reproducingLockRef.current = false;
     if (!exito) {
-      // Si fallo, intentar la siguiente
-      // Pequeña espera para no loopear rapido
+      // Si fallo, intentar la siguiente con delay
       setTimeout(() => {
         reproducirSiguiente();
-      }, 1000);
+      }, 2000);
     }
   }, [reproducirCancion, log]);
 
@@ -565,15 +570,30 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
     const tick = async () => {
       try {
         // Obtener solicitudes pendientes
-        const solicitudes = await getSolicitudes();
+        const todasSolicitudes = await getSolicitudes();
 
-        if (solicitudes && solicitudes.length > 0) {
-          // Marcar como procesadas
+        // Filtrar las que ya procesamos (por si mark_processed falla)
+        const solicitudes = (todasSolicitudes || []).filter(
+          (s) => !processedIdsRef.current.has(s.id)
+        );
+
+        if (solicitudes.length > 0) {
+          // Marcar como procesadas localmente primero (para no repetir)
           const ids = solicitudes.map((s) => s.id);
+          for (const id of ids) {
+            processedIdsRef.current.add(id);
+          }
+          // Limpiar IDs viejos (mantener últimos 500)
+          if (processedIdsRef.current.size > 500) {
+            const arr = [...processedIdsRef.current];
+            processedIdsRef.current = new Set(arr.slice(-200));
+          }
+
+          // Marcar en servidor
           try {
             await apiPost('mark_processed', { ids });
-          } catch {
-            // No critico
+          } catch (err) {
+            log(`Error marcando solicitudes: ${err}`);
           }
 
           // 1. Detectar y ejecutar comandos
@@ -651,16 +671,10 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
           return;
         }
 
-        // Si no esta sonando nada y no esta buscando, reproducir siguiente
-        if (!isPlayingRef.current && !searchingRef.current) {
-          if (queueRef.current.length > 0) {
+        // Si no esta sonando nada, no esta buscando, y no hay lock → reproducir
+        if (!isPlayingRef.current && !searchingRef.current && !reproducingLockRef.current) {
+          if (queueRef.current.length > 0 || bufferRef.current.length > 0) {
             reproducirSiguiente();
-          } else if (bufferRef.current.length > 0) {
-            // Mover una del buffer a la cola
-            const [primera, ...restoBuffer] = bufferRef.current;
-            setBuffer(restoBuffer);
-            setQueue([primera]);
-            setTimeout(() => reproducirSiguiente(), 200);
           }
         }
 
@@ -795,21 +809,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
     return () => clearInterval(interval);
   }, [config.autoMode, skip, stop, removeFromQueue, log]);
 
-  // ── Auto-rellenar cola cuando esta vacia ─────────────────────
-
-  useEffect(() => {
-    if (!config.autoFill || !config.autoMode) return;
-    if (queue.length > 0) return;
-    if (buffer.length === 0) {
-      rellenarBuffer();
-      return;
-    }
-
-    // Mover una del buffer a la cola
-    const [primera, ...resto] = buffer;
-    setBuffer(resto);
-    setQueue([primera]);
-  }, [config.autoFill, config.autoMode, queue.length, buffer, rellenarBuffer]);
+  // ── Auto-rellenar: solo rellenar buffer si está bajo (el auto_tick mueve del buffer a cola)
 
   return {
     queue,
