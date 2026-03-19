@@ -1076,42 +1076,102 @@
 }
 
 .settings-dialog__tests {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
-.settings-dialog__test-row {
+.settings-dialog__test-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--bg-highlight);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  transition: border-color var(--transition);
+}
+
+.settings-dialog__test-card.ok {
+  border-color: var(--accent);
+}
+
+.settings-dialog__test-card.error {
+  border-color: var(--red);
+}
+
+.settings-dialog__test-card.loading {
+  border-color: var(--gold);
+}
+
+.settings-dialog__test-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+}
+
+.settings-dialog__test-name {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-dialog__test-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-subdued);
+  flex-shrink: 0;
+}
+
+.settings-dialog__test-dot.ok {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+.settings-dialog__test-dot.error {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(248, 113, 113, 0.4);
+}
+
+.settings-dialog__test-dot.loading {
+  background: var(--gold);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .settings-dialog__btn-test {
-  padding: 6px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-full);
   background: none;
   color: var(--text-secondary);
-  font-size: 0.82em;
+  font-size: 0.75em;
   font-weight: 600;
   cursor: pointer;
   transition: all var(--transition);
-  white-space: nowrap;
+  align-self: flex-start;
 }
 
 .settings-dialog__btn-test:hover {
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.25);
   background: rgba(255, 255, 255, 0.04);
 }
 
 .settings-dialog__test-result {
-  font-size: 0.78em;
-  white-space: nowrap;
+  font-size: 0.72em;
+  color: var(--text-subdued);
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 300px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
 }
 
 .settings-dialog__test-result.ok {

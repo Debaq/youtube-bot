@@ -195,33 +195,42 @@ export default function SettingsDialog({ open, onClose, onStatusMessage }: Setti
           <h3 className="settings-dialog__section-title">Pruebas de conexion</h3>
           <div className="settings-dialog__tests">
             {[
-              { label: 'API PHP', key: 'api', fn: testApiConnection },
-              { label: 'Groq', key: 'groq', fn: testGroqConnection },
+              { label: 'API Servidor', key: 'api', fn: testApiConnection },
+              { label: 'Groq IA', key: 'groq', fn: testGroqConnection },
               { label: 'yt-dlp', key: 'ytdlp', fn: testYoutube },
               { label: 'mpv', key: 'mpv', fn: testMpv },
-            ].map((t) => (
-              <div key={t.key} className="settings-dialog__test-row">
-                <button
-                  className="settings-dialog__btn-test"
-                  onClick={async () => {
-                    setTestResults((prev) => ({ ...prev, [t.key]: 'Probando...' }));
-                    try {
-                      const result = await t.fn();
-                      setTestResults((prev) => ({ ...prev, [t.key]: result }));
-                    } catch (err) {
-                      setTestResults((prev) => ({ ...prev, [t.key]: `Error: ${err}` }));
-                    }
-                  }}
-                >
-                  Probar {t.label}
-                </button>
-                {testResults[t.key] && (
-                  <span className={`settings-dialog__test-result ${testResults[t.key].startsWith('Error') ? 'error' : 'ok'}`}>
-                    {testResults[t.key]}
-                  </span>
-                )}
-              </div>
-            ))}
+            ].map((t) => {
+              const result = testResults[t.key] || '';
+              const status = !result ? '' : result === 'Probando...' ? 'loading' : result.startsWith('Error') ? 'error' : 'ok';
+              return (
+                <div key={t.key} className={`settings-dialog__test-card ${status}`}>
+                  <div className="settings-dialog__test-header">
+                    <span className="settings-dialog__test-name">{t.label}</span>
+                    <span className={`settings-dialog__test-dot ${status}`} />
+                  </div>
+                  <button
+                    className="settings-dialog__btn-test"
+                    disabled={status === 'loading'}
+                    onClick={async () => {
+                      setTestResults((prev) => ({ ...prev, [t.key]: 'Probando...' }));
+                      try {
+                        const res = await t.fn();
+                        setTestResults((prev) => ({ ...prev, [t.key]: res }));
+                      } catch (err) {
+                        setTestResults((prev) => ({ ...prev, [t.key]: `Error: ${err}` }));
+                      }
+                    }}
+                  >
+                    {status === 'loading' ? 'Probando...' : 'Probar'}
+                  </button>
+                  {result && status !== 'loading' && (
+                    <span className={`settings-dialog__test-result ${status}`}>
+                      {result}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
