@@ -638,6 +638,11 @@ var thumbPlaceholderLg='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/sv
                         <div class="track-artist"><?php echo h($h2['artist']); ?></div>
                     </div>
                     <div class="track-votes"><span class="up">+<?php echo $h2['total_up']; ?></span> <span class="down">-<?php echo $h2['total_down']; ?></span></div>
+                    <div class="track-actions" style="opacity:1">
+                        <?php if (!empty($h2['youtube_url'])): ?>
+                        <a href="<?php echo h($h2['youtube_url']); ?>" target="_blank" class="track-btn" title="Abrir en YouTube">▶</a>
+                        <?php endif; ?>
+                    </div>
                 </li>
                 <?php endforeach; ?>
             </ul>
