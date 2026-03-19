@@ -230,16 +230,20 @@ async fn api_post(action: String, data: Value, app_config: State<'_, AppConfig>)
     let client = reqwest::Client::new();
     let url = format!("{}/api.php?action={}", base_url.trim_end_matches('/'), action);
 
-    let mut payload = match data {
+    let mut payload = match data.clone() {
         Value::Object(map) => map,
         _ => serde_json::Map::new(),
     };
-    payload.insert("action".into(), Value::String(action));
+    payload.insert("action".into(), Value::String(action.clone()));
+
+    let body_str = serde_json::to_string(&Value::Object(payload.clone()))
+        .unwrap_or_default();
 
     let resp = client
         .post(&url)
         .header("X-API-Key", &api_key)
-        .json(&Value::Object(payload))
+        .header("Content-Type", "application/json")
+        .body(body_str)
         .timeout(std::time::Duration::from_secs(8))
         .send()
         .await?;
