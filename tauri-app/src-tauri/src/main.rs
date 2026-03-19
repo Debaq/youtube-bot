@@ -136,51 +136,6 @@ fn read_config_from_disk() -> Config {
 
 const MPV_SOCKET: &str = "/tmp/musicbot-mpv.sock";
 
-/// Busca un ejecutable usando el PATH completo del usuario (via bash login shell)
-fn find_executable(name: &str) -> String {
-    // 1. bash -lc "which X" — hereda el PATH real del usuario (venvs, .local, etc.)
-    if let Ok(output) = Command::new("bash")
-        .args(["-lc", &format!("which {name}")])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() && std::path::Path::new(&path).exists() {
-                return path;
-            }
-        }
-    }
-    // 2. Rutas hardcodeadas comunes
-    let user = std::env::var("USER").unwrap_or_default();
-    let candidates = [
-        format!("/usr/bin/{name}"),
-        format!("/usr/local/bin/{name}"),
-        format!("/home/{user}/.local/bin/{name}"),
-        format!("/snap/bin/{name}"),
-        format!("/home/{user}/.cargo/bin/{name}"),
-    ];
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return c.clone();
-        }
-    }
-    // 3. Buscar en venvs del directorio de trabajo (proyecto)
-    if let Ok(cwd) = std::env::current_dir() {
-        let venv_bin = cwd.join(".venv").join("bin").join(name);
-        if venv_bin.exists() {
-            return venv_bin.to_string_lossy().to_string();
-        }
-        // Un nivel arriba (si cwd es src-tauri)
-        let parent_venv = cwd.parent().map(|p| p.join(".venv").join("bin").join(name));
-        if let Some(ref p) = parent_venv {
-            if p.exists() {
-                return p.to_string_lossy().to_string();
-            }
-        }
-    }
-    // 4. Último recurso: devolver el nombre y que falle con error descriptivo
-    name.to_string()
-}
 
 fn mpv_send_command(args: &[&str]) -> Result<(), AppError> {
     use std::os::unix::net::UnixStream;
@@ -458,23 +413,22 @@ async fn test_groq_connection(app_config: State<'_, AppConfig>) -> CmdResult<Str
 
 #[tauri::command]
 async fn test_youtube() -> CmdResult<String> {
-    let path = find_executable("yt-dlp");
-    let output = Command::new(&path)
+    let output = Command::new("yt-dlp")
         .args(["--version"])
         .output();
     match output {
         Ok(o) if o.status.success() => {
             let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            Ok(format!("yt-dlp v{version} en {path} - OK"))
+            Ok(format!("yt-dlp v{version} - OK"))
         }
-        Ok(o) => Err(AppError::Generic(format!("yt-dlp ({path}) error: {}", String::from_utf8_lossy(&o.stderr)))),
-        Err(e) => Err(AppError::Generic(format!("yt-dlp no encontrado en '{path}': {e}. Instala con: sudo pacman -S yt-dlp"))),
+        Ok(o) => Err(AppError::Generic(format!("yt-dlp error: {}", String::from_utf8_lossy(&o.stderr)))),
+        Err(_) => Err(AppError::Generic("yt-dlp no instalado. Ejecuta: sudo pacman -S yt-dlp".into())),
     }
 }
 
 #[tauri::command]
 async fn test_mpv() -> CmdResult<String> {
-    let output = Command::new(&find_executable("mpv"))
+    let output = Command::new("mpv")
         .args(["--version"])
         .output();
     match output {
@@ -497,7 +451,7 @@ async fn test_mpv() -> CmdResult<String> {
 
 #[tauri::command]
 async fn youtube_search(query: String) -> CmdResult<Vec<YoutubeResult>> {
-    let output = Command::new(&find_executable("yt-dlp"))
+    let output = Command::new("yt-dlp")
         .args([
             "--dump-json",
             "--flat-playlist",
@@ -589,7 +543,7 @@ fn youtube_play(
         args.push("--no-video".to_string());
     }
 
-    let child = Command::new(&find_executable("mpv")).args(&args).spawn()?;
+    let child = Command::new("mpv").args(&args).spawn()?;
 
     if let Ok(mut guard) = mpv_state.0.lock() {
         *guard = Some(child);

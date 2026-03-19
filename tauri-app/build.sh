@@ -23,7 +23,8 @@ check_cmd() {
 
 check_cmd node "Instala Node.js 18+"
 check_cmd cargo "Instala Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-check_cmd mpv "Instala mpv: sudo pacman -S mpv"
+check_cmd mpv "Instala: sudo pacman -S mpv"
+check_cmd yt-dlp "Instala: sudo pacman -S yt-dlp"
 
 echo "Node: $(node --version)"
 echo "Cargo: $(cargo --version | cut -d' ' -f2)"
