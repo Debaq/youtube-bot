@@ -52,14 +52,15 @@ switch ($action) {
 
     // Marcar solicitudes como procesadas
     case 'mark_processed':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $raw = file_get_contents('php://input');
+        $input = json_decode($raw, true);
         $ids = $input['ids'] ?? [];
         if ($ids) {
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
             $stmt = $pdo->prepare("UPDATE requests SET processed = 1 WHERE id IN ($placeholders)");
             $stmt->execute(array_map('intval', $ids));
         }
-        echo json_encode(['ok' => true, 'updated' => count($ids)]);
+        echo json_encode(['ok' => true, 'updated' => count($ids), 'received_ids' => $ids, 'raw_length' => strlen($raw)]);
         break;
 
     // Setear canción actual (la app Python informa qué está sonando)
@@ -463,16 +464,17 @@ switch ($action) {
         echo json_encode($stmt->fetchAll());
         break;
 
-    // Python marca acciones como procesadas
+    // Python/Tauri marca acciones como procesadas
     case 'mark_queue_actions':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $raw = file_get_contents('php://input');
+        $input = json_decode($raw, true);
         $ids = $input['ids'] ?? [];
         if ($ids) {
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
             $stmt = $pdo->prepare("UPDATE queue_actions SET processed = 1 WHERE id IN ($placeholders)");
             $stmt->execute(array_map('intval', $ids));
         }
-        echo json_encode(['ok' => true]);
+        echo json_encode(['ok' => true, 'received_ids' => $ids, 'raw_length' => strlen($raw)]);
         break;
 
     // Python guarda una playlist generada

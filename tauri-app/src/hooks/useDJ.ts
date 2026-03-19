@@ -592,7 +592,8 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
 
           // Marcar en servidor
           try {
-            await apiPost('mark_processed', { ids });
+            const resp = await apiPost('mark_processed', { ids });
+            log(`mark_processed: ${JSON.stringify(resp)}`);
           } catch (err) {
             log(`Error marcando solicitudes: ${err}`);
           }
@@ -801,7 +802,8 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
           }
           // Marcar acciones como procesadas
           try {
-            await apiPost('mark_queue_actions', { ids });
+            const resp = await apiPost('mark_queue_actions', { ids });
+            log(`mark_queue_actions: ${JSON.stringify(resp)}`);
           } catch (err) {
             log(`Error marcando acciones: ${err}`);
           }
