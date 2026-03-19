@@ -1,8 +1,24 @@
 <?php
 session_start();
 
-define('API_KEY', getenv('MUSICBOT_API_KEY') ?: 'cambiar_esta_clave');
-define('DB_PATH', __DIR__ . '/db/musicbot.sqlite');
+// Cargar .env del directorio web (si existe)
+$_env_file = __DIR__ . '/.env';
+if (file_exists($_env_file)) {
+    foreach (file($_env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $_line) {
+        $_line = trim($_line);
+        if ($_line === '' || $_line[0] === '#') continue;
+        if (strpos($_line, '=') === false) continue;
+        list($_k, $_v) = explode('=', $_line, 2);
+        $_ENV[trim($_k)] = trim($_v);
+    }
+}
+
+function env($key, $default = '') {
+    return isset($_ENV[$key]) ? $_ENV[$key] : (getenv($key) ?: $default);
+}
+
+define('API_KEY', env('MUSICBOT_API_KEY', 'cambiar_esta_clave'));
+define('DB_PATH', __DIR__ . '/' . env('MUSICBOT_DB_PATH', 'db/musicbot.sqlite'));
 
 function db() {
     static $pdo = null;
@@ -113,7 +129,8 @@ function init_db($pdo) {
 function validar_email($email) {
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) return false;
     $dominio = strtolower(substr($email, strrpos($email, '@') + 1));
-    return in_array($dominio, array('uach.cl', 'alumnos.uach.cl'));
+    $permitidos = array_map('trim', explode(',', env('MUSICBOT_ALLOWED_DOMAINS', 'uach.cl,alumnos.uach.cl')));
+    return in_array($dominio, $permitidos);
 }
 
 function usuario_logueado() {
