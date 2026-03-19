@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Config } from '../types';
-import { loadConfig, saveConfig, groqListModels } from '../api';
+import { loadConfig, saveConfig, groqListModels, testApiConnection, testGroqConnection, testYoutube, testMpv } from '../api';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -21,6 +21,7 @@ export default function SettingsDialog({ open, onClose, onStatusMessage }: Setti
   const [groqModels, setGroqModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [testResults, setTestResults] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!open) return;
@@ -189,6 +190,40 @@ export default function SettingsDialog({ open, onClose, onStatusMessage }: Setti
             </div>
           </div>
         )}
+
+        <div className="settings-dialog__section">
+          <h3 className="settings-dialog__section-title">Pruebas de conexion</h3>
+          <div className="settings-dialog__tests">
+            {[
+              { label: 'API PHP', key: 'api', fn: testApiConnection },
+              { label: 'Groq', key: 'groq', fn: testGroqConnection },
+              { label: 'yt-dlp', key: 'ytdlp', fn: testYoutube },
+              { label: 'mpv', key: 'mpv', fn: testMpv },
+            ].map((t) => (
+              <div key={t.key} className="settings-dialog__test-row">
+                <button
+                  className="settings-dialog__btn-test"
+                  onClick={async () => {
+                    setTestResults((prev) => ({ ...prev, [t.key]: 'Probando...' }));
+                    try {
+                      const result = await t.fn();
+                      setTestResults((prev) => ({ ...prev, [t.key]: result }));
+                    } catch (err) {
+                      setTestResults((prev) => ({ ...prev, [t.key]: `Error: ${err}` }));
+                    }
+                  }}
+                >
+                  Probar {t.label}
+                </button>
+                {testResults[t.key] && (
+                  <span className={`settings-dialog__test-result ${testResults[t.key].startsWith('Error') ? 'error' : 'ok'}`}>
+                    {testResults[t.key]}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
 
         <div className="settings-dialog__footer">
           <button className="settings-dialog__btn settings-dialog__btn--cancel" onClick={onClose}>

@@ -1075,6 +1075,53 @@
   cursor: not-allowed;
 }
 
+.settings-dialog__tests {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-dialog__test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-dialog__btn-test {
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.82em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.settings-dialog__btn-test:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-dialog__test-result {
+  font-size: 0.78em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.settings-dialog__test-result.ok {
+  color: var(--accent);
+}
+
+.settings-dialog__test-result.error {
+  color: var(--red);
+}
+
 .settings-dialog__footer {
   display: flex;
   justify-content: flex-end;

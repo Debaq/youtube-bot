@@ -30,7 +30,7 @@ impl Default for Config {
             api_key: String::new(),
             groq_api_key: String::new(),
             groq_model: "llama-3.3-70b-versatile".into(),
-            weather_city: "Santiago".into(),
+            weather_city: "Valdivia".into(),
             autostart: false,
             minimize_to_tray: false,
         }
@@ -52,10 +52,11 @@ struct GroqMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Estado global: proceso mpv
+// Estado global
 // ---------------------------------------------------------------------------
 
 struct MpvProcess(Mutex<Option<Child>>);
+struct AppConfig(Mutex<Config>);
 
 // ---------------------------------------------------------------------------
 // Error serializable para Tauri commands
@@ -67,8 +68,6 @@ enum AppError {
     Generic(String),
 }
 
-// thiserror no esta en las dependencias, asi que implementamos a mano
-// Tauri v2 necesita que el error implemente Serialize
 impl Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -109,10 +108,19 @@ fn config_path() -> std::path::PathBuf {
     path
 }
 
+fn read_config_from_disk() -> Config {
+    let path = config_path();
+    if path.exists() {
+        let data = std::fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        Config::default()
+    }
+}
+
 const MPV_SOCKET: &str = "/tmp/musicbot-mpv.sock";
 
 fn mpv_send_command(args: &[&str]) -> Result<(), AppError> {
-    use std::io::Write;
     use std::os::unix::net::UnixStream;
 
     let command = serde_json::json!({ "command": args });
@@ -128,41 +136,65 @@ fn mpv_send_command(args: &[&str]) -> Result<(), AppError> {
     Ok(())
 }
 
+fn timestamp_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Convertir a formato legible sin chrono
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
 // ---------------------------------------------------------------------------
 // Commands: Configuracion
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn load_config() -> CmdResult<Config> {
-    let path = config_path();
-    if path.exists() {
-        let data = std::fs::read_to_string(&path)?;
-        let config: Config = serde_json::from_str(&data)?;
-        Ok(config)
-    } else {
-        Ok(Config::default())
+fn load_config(app_config: State<AppConfig>) -> CmdResult<Config> {
+    let cfg = read_config_from_disk();
+    // Actualizar estado en memoria
+    if let Ok(mut guard) = app_config.0.lock() {
+        *guard = cfg.clone();
     }
+    Ok(cfg)
 }
 
 #[tauri::command]
-fn save_config(config: Config) -> CmdResult<()> {
+fn save_config(config: Config, app_config: State<AppConfig>) -> CmdResult<()> {
     let path = config_path();
     let data = serde_json::to_string_pretty(&config)?;
     std::fs::write(&path, data)?;
+    // Actualizar estado en memoria
+    if let Ok(mut guard) = app_config.0.lock() {
+        *guard = config;
+    }
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Commands: API PHP Client
+// Commands: API PHP Client (lee config del estado)
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn api_get(base_url: String, api_key: String, action: String) -> CmdResult<Value> {
+async fn api_get(action: String, app_config: State<'_, AppConfig>) -> CmdResult<Value> {
+    let (base_url, api_key) = {
+        let guard = app_config.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        (guard.server_url.clone(), guard.api_key.clone())
+    };
+    if base_url.is_empty() {
+        return Err(AppError::Generic("server_url no configurado".into()));
+    }
     let client = reqwest::Client::new();
     let url = format!("{}/api.php", base_url.trim_end_matches('/'));
     let resp = client
         .get(&url)
-        .query(&[("action", &action), ("api_key", &api_key)])
+        .query(&[("action", &action)])
+        .header("X-API-Key", &api_key)
+        .timeout(std::time::Duration::from_secs(8))
         .send()
         .await?;
     let body: Value = resp.json().await?;
@@ -170,25 +202,28 @@ async fn api_get(base_url: String, api_key: String, action: String) -> CmdResult
 }
 
 #[tauri::command]
-async fn api_post(
-    base_url: String,
-    api_key: String,
-    action: String,
-    data: Value,
-) -> CmdResult<Value> {
+async fn api_post(action: String, data: Value, app_config: State<'_, AppConfig>) -> CmdResult<Value> {
+    let (base_url, api_key) = {
+        let guard = app_config.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        (guard.server_url.clone(), guard.api_key.clone())
+    };
+    if base_url.is_empty() {
+        return Err(AppError::Generic("server_url no configurado".into()));
+    }
     let client = reqwest::Client::new();
-    let url = format!("{}/api.php", base_url.trim_end_matches('/'));
+    let url = format!("{}/api.php?action={}", base_url.trim_end_matches('/'), action);
 
     let mut payload = match data {
         Value::Object(map) => map,
         _ => serde_json::Map::new(),
     };
     payload.insert("action".into(), Value::String(action));
-    payload.insert("api_key".into(), Value::String(api_key));
 
     let resp = client
         .post(&url)
+        .header("X-API-Key", &api_key)
         .json(&Value::Object(payload))
+        .timeout(std::time::Duration::from_secs(8))
         .send()
         .await?;
     let body: Value = resp.json().await?;
@@ -196,28 +231,38 @@ async fn api_post(
 }
 
 // ---------------------------------------------------------------------------
-// Commands: Groq
+// Commands: Groq (lee config del estado)
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
 async fn groq_chat(
-    api_key: String,
-    model: String,
     messages: Vec<GroqMessage>,
-    temperature: f64,
-    max_tokens: u32,
-    json_mode: bool,
+    temperature: Option<f64>,
+    max_tokens: Option<u32>,
+    json_mode: Option<bool>,
+    app_config: State<'_, AppConfig>,
 ) -> CmdResult<String> {
-    let client = reqwest::Client::new();
+    let (api_key, model) = {
+        let guard = app_config.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        (guard.groq_api_key.clone(), guard.groq_model.clone())
+    };
+    if api_key.is_empty() {
+        return Err(AppError::Generic("groq_api_key no configurado".into()));
+    }
 
+    let temp = temperature.unwrap_or(0.8);
+    let tokens = max_tokens.unwrap_or(1024);
+    let json = json_mode.unwrap_or(false);
+
+    let client = reqwest::Client::new();
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
+        "temperature": temp,
+        "max_tokens": tokens,
     });
 
-    if json_mode {
+    if json {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
 
@@ -226,10 +271,15 @@ async fn groq_chat(
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await?;
 
     let data: Value = resp.json().await?;
+
+    if let Some(err) = data["error"]["message"].as_str() {
+        return Err(AppError::Generic(format!("Groq error: {err}")));
+    }
 
     let content = data["choices"][0]["message"]["content"]
         .as_str()
@@ -239,26 +289,138 @@ async fn groq_chat(
 }
 
 #[tauri::command]
-async fn groq_list_models(api_key: String) -> CmdResult<Vec<String>> {
+async fn groq_list_models(app_config: State<'_, AppConfig>) -> CmdResult<Vec<String>> {
+    let api_key = {
+        let guard = app_config.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        guard.groq_api_key.clone()
+    };
+    if api_key.is_empty() {
+        return Err(AppError::Generic("groq_api_key no configurado".into()));
+    }
+
     let client = reqwest::Client::new();
     let resp = client
         .get("https://api.groq.com/openai/v1/models")
         .header("Authorization", format!("Bearer {api_key}"))
+        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await?;
 
     let data: Value = resp.json().await?;
 
+    // Filtrar solo modelos aptos para chat (excluir whisper, etc.)
+    let excluir = ["whisper", "prompt-guard", "compound", "orpheus", "safeguard"];
     let models = data["data"]
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|m| m["id"].as_str().map(String::from))
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?;
+                    let active = m["active"].as_bool().unwrap_or(true);
+                    if active && !excluir.iter().any(|ex| id.contains(ex)) {
+                        Some(id.to_string())
+                    } else {
+                        None
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default();
 
     Ok(models)
+}
+
+// ---------------------------------------------------------------------------
+// Commands: Test de conexión
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn test_api_connection(app_config: State<'_, AppConfig>) -> CmdResult<String> {
+    let (base_url, api_key) = {
+        let guard = app_config.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        (guard.server_url.clone(), guard.api_key.clone())
+    };
+    if base_url.is_empty() {
+        return Err(AppError::Generic("server_url no configurado".into()));
+    }
+    let client = reqwest::Client::new();
+    let url = format!("{}/api.php", base_url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .query(&[("action", "stats")])
+        .header("X-API-Key", &api_key)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await?;
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or(Value::Null);
+    Ok(format!("HTTP {} - {}", status.as_u16(), serde_json::to_string_pretty(&body).unwrap_or_default()))
+}
+
+#[tauri::command]
+async fn test_groq_connection(app_config: State<'_, AppConfig>) -> CmdResult<String> {
+    let (api_key, model) = {
+        let guard = app_config.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        (guard.groq_api_key.clone(), guard.groq_model.clone())
+    };
+    if api_key.is_empty() {
+        return Err(AppError::Generic("groq_api_key no configurado".into()));
+    }
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "Responde solo 'OK'"}],
+        "temperature": 0.1,
+        "max_tokens": 10,
+    });
+    let resp = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    let status = resp.status();
+    let data: Value = resp.json().await?;
+    let content = data["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("(sin respuesta)");
+    Ok(format!("HTTP {} - Modelo: {} - Respuesta: {}", status.as_u16(), model, content))
+}
+
+#[tauri::command]
+async fn test_youtube() -> CmdResult<String> {
+    let output = Command::new("yt-dlp")
+        .args(["--version"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            Ok(format!("yt-dlp v{version} - OK"))
+        }
+        Ok(o) => Err(AppError::Generic(format!("yt-dlp salió con error: {}", String::from_utf8_lossy(&o.stderr)))),
+        Err(e) => Err(AppError::Generic(format!("yt-dlp no encontrado: {e}"))),
+    }
+}
+
+#[tauri::command]
+async fn test_mpv() -> CmdResult<String> {
+    let output = Command::new("mpv")
+        .args(["--version"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let first_line = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("OK")
+                .to_string();
+            Ok(first_line)
+        }
+        Ok(o) => Err(AppError::Generic(format!("mpv salió con error: {}", String::from_utf8_lossy(&o.stderr)))),
+        Err(e) => Err(AppError::Generic(format!("mpv no encontrado: {e}"))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +435,7 @@ async fn youtube_search(query: String) -> CmdResult<Vec<YoutubeResult>> {
             "--flat-playlist",
             "--no-warnings",
             "--default-search",
-            "ytsearch10",
+            "ytsearch5",
             &query,
         ])
         .output()?;
@@ -291,10 +453,7 @@ async fn youtube_search(query: String) -> CmdResult<Vec<YoutubeResult>> {
             continue;
         }
         if let Ok(entry) = serde_json::from_str::<Value>(line) {
-            let titulo = entry["title"]
-                .as_str()
-                .unwrap_or("Sin titulo")
-                .to_string();
+            let titulo = entry["title"].as_str().unwrap_or("Sin titulo").to_string();
             let url = entry["url"]
                 .as_str()
                 .or_else(|| entry["webpage_url"].as_str())
@@ -333,11 +492,11 @@ async fn youtube_search(query: String) -> CmdResult<Vec<YoutubeResult>> {
 #[tauri::command]
 fn youtube_play(
     url: String,
-    volume: u32,
-    video: bool,
+    volume: Option<u32>,
+    video: Option<bool>,
     mpv_state: State<MpvProcess>,
 ) -> CmdResult<bool> {
-    // Matar proceso previo si existe
+    // Matar proceso previo
     if let Ok(mut guard) = mpv_state.0.lock() {
         if let Some(ref mut child) = *guard {
             let _ = child.kill();
@@ -346,23 +505,23 @@ fn youtube_play(
         *guard = None;
     }
 
-    // Eliminar socket previo
     let _ = std::fs::remove_file(MPV_SOCKET);
+
+    let vol = volume.unwrap_or(80);
+    let vid = video.unwrap_or(false);
 
     let mut args = vec![
         url.clone(),
-        format!("--volume={volume}"),
+        format!("--volume={vol}"),
         format!("--input-ipc-server={MPV_SOCKET}"),
         "--no-terminal".to_string(),
     ];
 
-    if !video {
+    if !vid {
         args.push("--no-video".to_string());
     }
 
-    let child = Command::new("mpv")
-        .args(&args)
-        .spawn()?;
+    let child = Command::new("mpv").args(&args).spawn()?;
 
     if let Ok(mut guard) = mpv_state.0.lock() {
         *guard = Some(child);
@@ -390,7 +549,6 @@ fn player_is_playing(mpv_state: State<MpvProcess>) -> CmdResult<bool> {
         if let Some(ref mut child) = *guard {
             match child.try_wait() {
                 Ok(Some(_)) => {
-                    // Proceso termino
                     *guard = None;
                     return Ok(false);
                 }
@@ -464,29 +622,15 @@ fn log_message(message: String) -> CmdResult<()> {
     path.pop();
     path.push("musicbot.log");
 
-    let timestamp = chrono_free_timestamp();
+    let ts = timestamp_now();
 
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)?;
-    writeln!(file, "[{timestamp}] {message}")?;
-
-    // Tambien imprimir en stdout para debug
-    println!("[{timestamp}] {message}");
+    writeln!(file, "[{ts}] {message}")?;
+    println!("[{ts}] {message}");
     Ok(())
-}
-
-/// Genera un timestamp sin depender de chrono, usando el comando `date`.
-fn chrono_free_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
-    // Formato simple: epoch seconds (para no agregar dependencia chrono)
-    // Se podria mejorar con la crate chrono si se desea
-    format!("{secs}")
 }
 
 // ---------------------------------------------------------------------------
@@ -494,9 +638,12 @@ fn chrono_free_timestamp() -> String {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    let initial_config = read_config_from_disk();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(MpvProcess(Mutex::new(None)))
+        .manage(AppConfig(Mutex::new(initial_config)))
         .invoke_handler(tauri::generate_handler![
             // Configuracion
             load_config,
@@ -507,6 +654,11 @@ fn main() {
             // Groq
             groq_chat,
             groq_list_models,
+            // Tests de conexión
+            test_api_connection,
+            test_groq_connection,
+            test_youtube,
+            test_mpv,
             // YouTube / Player
             youtube_search,
             youtube_play,
