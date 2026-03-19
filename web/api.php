@@ -38,6 +38,9 @@ switch ($action) {
 
     // Obtener solicitudes pendientes de los usuarios
     case 'pending_requests':
+        // Expirar solicitudes viejas (>30 min)
+        $pdo->exec("UPDATE requests SET processed = 1 WHERE processed = 0 AND created_at < datetime('now', '-30 minutes')");
+
         $stmt = $pdo->query("
             SELECT r.id, r.texto, r.priority, r.created_at, u.email
             FROM requests r
@@ -47,7 +50,17 @@ switch ($action) {
                 CASE WHEN r.priority = 'now' THEN 0 ELSE 1 END,
                 r.created_at ASC
         ");
-        echo json_encode($stmt->fetchAll());
+        $rows = $stmt->fetchAll();
+
+        // Auto-marcar como procesadas al entregarlas (para que no se repitan si mark_processed falla)
+        if ($rows) {
+            $ids = array_column($rows, 'id');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $pdo->prepare("UPDATE requests SET processed = 1 WHERE id IN ($placeholders)")
+                ->execute(array_map('intval', $ids));
+        }
+
+        echo json_encode($rows);
         break;
 
     // Marcar solicitudes como procesadas
@@ -458,10 +471,20 @@ switch ($action) {
         echo json_encode(['ok' => true, 'queue' => count($queue), 'buffer' => count($buffer)]);
         break;
 
-    // Python lee acciones pendientes de la web
+    // Python/Tauri lee acciones pendientes de la web
     case 'pending_queue_actions':
         $stmt = $pdo->query("SELECT * FROM queue_actions WHERE processed = 0 ORDER BY id ASC");
-        echo json_encode($stmt->fetchAll());
+        $rows = $stmt->fetchAll();
+
+        // Auto-marcar como procesadas al entregarlas
+        if ($rows) {
+            $ids = array_column($rows, 'id');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $pdo->prepare("UPDATE queue_actions SET processed = 1 WHERE id IN ($placeholders)")
+                ->execute(array_map('intval', $ids));
+        }
+
+        echo json_encode($rows);
         break;
 
     // Python/Tauri marca acciones como procesadas
