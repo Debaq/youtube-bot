@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Config, YoutubeResult } from './types';
+import type { Config, YoutubeResult, Song, Solicitud } from './types';
 
 // ── Configuración ──────────────────────────────────────────────
 
@@ -94,6 +94,67 @@ export async function playerSetVolume(volume: number): Promise<void> {
 
 export async function playerSetVideo(enabled: boolean): Promise<void> {
   await invoke('player_set_video', { enabled });
+}
+
+// ── Cola (stubs — la lógica de cola se maneja en el frontend) ──
+
+export async function getQueue(): Promise<Song[]> {
+  return [];
+}
+
+export async function getCurrentSong(): Promise<Song | null> {
+  return null;
+}
+
+export async function skipSong(): Promise<void> {
+  await playerStop();
+}
+
+export async function removeSong(_index: number): Promise<void> {
+  // TODO: implementar cola en estado global
+}
+
+export async function moveSongUp(_index: number): Promise<void> {
+  // TODO: implementar cola en estado global
+}
+
+export async function voteSong(_index: number, _delta: number): Promise<void> {
+  // TODO: implementar votos
+}
+
+// ── Solicitudes ────────────────────────────────────────────────
+
+export async function getSolicitudes(): Promise<Solicitud[]> {
+  try {
+    return await apiGet<Solicitud[]>('pending_requests');
+  } catch {
+    return [];
+  }
+}
+
+export async function approveSolicitud(id: number): Promise<void> {
+  await apiPost('mark_processed', { ids: [id] });
+}
+
+export async function rejectSolicitud(id: number): Promise<void> {
+  await apiPost('mark_processed', { ids: [id] });
+}
+
+// ── Controles de estado (stubs) ────────────────────────────────
+
+export async function setAutoMode(_enabled: boolean): Promise<void> {}
+export async function setAutoFill(_enabled: boolean): Promise<void> {}
+export async function setScheduleEnabled(_enabled: boolean): Promise<void> {}
+export async function setMoodEnabled(_enabled: boolean): Promise<void> {}
+
+export async function setPreset(_presetName: string): Promise<void> {}
+
+export async function getStatus(): Promise<Record<string, unknown>> {
+  return {};
+}
+
+export async function getLogs(): Promise<string[]> {
+  return [];
 }
 
 // ── Sistema ────────────────────────────────────────────────────
