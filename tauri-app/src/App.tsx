@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import './App.css';
 import type { Song, Solicitud, AppState } from './types';
 import { usePolling } from './hooks/usePolling';
@@ -8,7 +8,11 @@ import {
   playerIsPlaying,
   getSolicitudes,
   getLogs,
+  getServerVolume,
+  playerSetVolume,
+  playerSetVideo,
 } from './api';
+import type { ServerVolume } from './api';
 
 import Sidebar from './components/Sidebar';
 import PlayerBar from './components/PlayerBar';
@@ -57,6 +61,25 @@ function App() {
     fetchSolicitudes,
     5000
   );
+
+  // ── Polling: volumen y estado desde servidor ────────────────
+  const fetchServerVolume = useCallback(() => getServerVolume(), []);
+  const { data: serverVolume } = usePolling<ServerVolume | null>(fetchServerVolume, 15000);
+
+  // Aplicar cambios del servidor al player local
+  useEffect(() => {
+    if (!serverVolume) return;
+    const vol = serverVolume.muted ? 0 : serverVolume.volume;
+    setVolume(vol);
+    playerSetVolume(vol).catch(() => {});
+    playerSetVideo(serverVolume.video).catch(() => {});
+    setAppState((prev) => ({
+      ...prev,
+      autoMode: serverVolume.auto_mode ?? prev.autoMode,
+      autoFill: serverVolume.auto_fill ?? prev.autoFill,
+      videoEnabled: serverVolume.video ?? prev.videoEnabled,
+    }));
+  }, [serverVolume]);
 
   // ── Polling: logs ────────────────────────────────────────────
   const fetchLogs = useCallback(() => getLogs(), []);

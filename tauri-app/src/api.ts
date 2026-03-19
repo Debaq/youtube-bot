@@ -140,6 +140,27 @@ export async function rejectSolicitud(id: number): Promise<void> {
   await apiPost('mark_processed', { ids: [id] });
 }
 
+// ── Sincronización con servidor ─────────────────────────────────
+
+export interface ServerVolume {
+  volume: number;
+  muted: boolean;
+  video: boolean;
+  preset: string;
+  city: string;
+  auto_mode: boolean;
+  auto_fill: boolean;
+}
+
+export async function getServerVolume(): Promise<ServerVolume | null> {
+  try {
+    const data = await apiGet<ServerVolume>('volume');
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 // ── Controles de estado (stubs) ────────────────────────────────
 
 export async function setAutoMode(_enabled: boolean): Promise<void> {}
