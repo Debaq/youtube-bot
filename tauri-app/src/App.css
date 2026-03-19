@@ -911,6 +911,67 @@
   color: #000;
 }
 
+.requests-panel__item-badge {
+  font-size: 0.65em;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+.requests-panel__item-badge--directa {
+  background: rgba(29, 185, 84, 0.15);
+  color: var(--accent);
+}
+
+.requests-panel__item-badge--groq {
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--purple);
+}
+
+.requests-panel__item-badge--comando {
+  background: rgba(251, 146, 60, 0.15);
+  color: var(--orange);
+}
+
+.requests-panel__item-time {
+  font-size: 0.7em;
+  color: var(--text-subdued);
+  margin-left: auto;
+}
+
+.requests-panel__item-songs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  align-items: center;
+}
+
+.requests-panel__song-tag {
+  font-size: 0.72em;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.requests-panel__btn-replay {
+  font-size: 0.72em;
+  padding: 2px 10px;
+  border: 1px solid rgba(29, 185, 84, 0.3);
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.requests-panel__btn-replay:hover {
+  background: rgba(29, 185, 84, 0.1);
+  border-color: var(--accent);
+}
+
 /* ── Settings Dialog ──────────────────────────────────────────── */
 
 .settings-overlay {

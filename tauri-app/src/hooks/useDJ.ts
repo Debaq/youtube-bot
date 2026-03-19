@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Song, Solicitud } from '../types';
+import type { Song, Solicitud, SolicitudProcesada } from '../types';
 import {
   apiGet,
   apiPost,
@@ -93,6 +93,7 @@ export interface UseDJReturn {
   currentSong: Song | null;
   isPlaying: boolean;
   searching: boolean;
+  historial: SolicitudProcesada[];
   skip: () => void;
   stop: () => void;
   addToQueue: (songs: Song[]) => void;
@@ -109,6 +110,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [historial, setHistorial] = useState<SolicitudProcesada[]>([]);
 
   // Refs para evitar closures stale en los intervalos
   const queueRef = useRef(queue);
@@ -577,13 +579,36 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
           // 1. Detectar y ejecutar comandos
           const sinComandos = detectarComandos(solicitudes);
 
+          // Guardar comandos en historial
+          const comandos = solicitudes.filter((s) => !sinComandos.includes(s));
+          for (const cmd of comandos) {
+            setHistorial((prev) => [...prev, {
+              solicitud: cmd,
+              canciones: [],
+              tipo: 'comando',
+              timestamp: Date.now(),
+            }]);
+          }
+
           // 2. Separar directas de las que necesitan Groq
           const { directas, paraGroq } = extraerDirectas(sinComandos);
 
-          // 3. Agregar directas a la cola
+          // 3. Agregar directas a la cola + guardar en historial
           if (directas.length > 0) {
             log(`${directas.length} pedido(s) directo(s) detectado(s)`);
             addToQueue(directas);
+            // Asociar cada directa con su solicitud original
+            for (const d of directas) {
+              const solOriginal = sinComandos.find((s) => s.texto === d.texto_original);
+              if (solOriginal) {
+                setHistorial((prev) => [...prev, {
+                  solicitud: solOriginal,
+                  canciones: [d],
+                  tipo: 'directa',
+                  timestamp: Date.now(),
+                }]);
+              }
+            }
           }
 
           // 4. Consultar Groq con el resto
@@ -591,6 +616,16 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
             log('Consultando IA con solicitudes...');
             const cancionesGroq = await consultarGroq(paraGroq);
             if (cancionesGroq.length > 0) {
+              // Guardar en historial
+              for (const s of paraGroq) {
+                setHistorial((prev) => [...prev, {
+                  solicitud: s,
+                  canciones: cancionesGroq,
+                  tipo: 'groq',
+                  timestamp: Date.now(),
+                }]);
+              }
+
               // Las de priority=now van a la cola, el resto al buffer
               const ahora = cancionesGroq.filter((c) => c.priority === 'now');
               const resto = cancionesGroq.filter((c) => c.priority !== 'now');
@@ -783,6 +818,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
     currentSong,
     isPlaying,
     searching,
+    historial,
     skip,
     stop,
     addToQueue,

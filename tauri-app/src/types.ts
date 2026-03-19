@@ -33,6 +33,13 @@ export interface Solicitud {
   priority: string;
 }
 
+export interface SolicitudProcesada {
+  solicitud: Solicitud;
+  canciones: Song[];
+  tipo: 'directa' | 'groq' | 'comando';
+  timestamp: number;
+}
+
 export type DJPreset = {
   name: string;
   description: string;

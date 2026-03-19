@@ -1,11 +1,10 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import './App.css';
-import type { Solicitud, AppState } from './types';
+import type { AppState } from './types';
 import { DJ_PRESETS } from './types';
 import { usePolling } from './hooks/usePolling';
 import { useDJ } from './hooks/useDJ';
 import {
-  getSolicitudes,
   getServerVolume,
   playerSetVolume,
   playerSetVideo,
@@ -60,13 +59,6 @@ function App() {
     videoEnabled: appState.videoEnabled,
     onStatusMessage: handleStatusMessage,
   });
-
-  // ── Polling: solicitudes (solo para mostrar en el panel) ─────
-  const fetchSolicitudes = useCallback(() => getSolicitudes(), []);
-  const { data: solicitudes, refresh: refreshSolicitudes } = usePolling<Solicitud[]>(
-    fetchSolicitudes,
-    5000
-  );
 
   // ── Polling: volumen y estado desde servidor ────────────────
   const fetchServerVolume = useCallback(() => getServerVolume(), []);
@@ -163,9 +155,9 @@ function App() {
       case 'requests':
         return (
           <RequestsPanel
-            solicitudes={solicitudes || []}
+            historial={dj.historial}
+            onAddToQueue={dj.addToQueue}
             onStatusMessage={handleStatusMessage}
-            onRefresh={refreshSolicitudes}
           />
         );
       case 'logs':
