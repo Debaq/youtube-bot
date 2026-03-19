@@ -233,21 +233,17 @@ async fn api_post(action: String, data: Value, app_config: State<'_, AppConfig>)
     // Debug: ver qué llega de Tauri
     println!("[api_post] action={action}, data={data}");
 
-    let mut payload = match data.clone() {
+    let payload = match data.clone() {
         Value::Object(map) => map,
         _ => serde_json::Map::new(),
     };
-    payload.insert("action".into(), Value::String(action.clone()));
 
-    let body_str = serde_json::to_string(&Value::Object(payload.clone()))
-        .unwrap_or_default();
-    println!("[api_post] body_str={body_str}");
+    println!("[api_post] payload={}", Value::Object(payload.clone()));
 
     let resp = client
         .post(&url)
         .header("X-API-Key", &api_key)
-        .header("Content-Type", "application/json")
-        .body(body_str)
+        .json(&Value::Object(payload))
         .timeout(std::time::Duration::from_secs(8))
         .send()
         .await?;

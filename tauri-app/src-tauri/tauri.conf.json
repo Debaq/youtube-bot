@@ -5,7 +5,7 @@
   "identifier": "org.debaq.musicbot",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5199",
+    "devUrl": "http://localhost:5100",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },

@@ -18,9 +18,9 @@ import type { GroqMessage } from '../api';
 const POLL_MS = 15_000;
 const PLAYCHECK_MS = 3_000;
 const SYNC_MS = 30_000;
-const BUFFER_MIN = 5;
-const BUFFER_TARGET = 15;
-const REFILL_COOLDOWN_MS = 60_000;
+const BUFFER_MAX = 5;
+const BUFFER_REFILL = 2;
+const REFILL_COOLDOWN_MS = 30_000;
 
 const COMANDOS_SIGUIENTE = new Set([
   'u', 'siguiente', 'next', 'skip', 's', 'otra', 'cambia', 'cambiale',
@@ -46,13 +46,9 @@ Recibirás solicitudes de varios usuarios.
 Analiza TODAS las solicitudes y sugiere las mejores canciones.
 Responde SOLO con JSON: {"canciones": [{"titulo": "...", "artista": "...", "razon": "..."}]}`;
 
-const SYSTEM_PROMPT_BUFFER = (preset: string, contextoDoradas: string) =>
-  `Eres un DJ y curador musical experto para una sala comunitaria.
-Ambiente actual: ${preset}.
-Sugiere canciones variadas que encajen con el ambiente.
-${contextoDoradas}
+const SYSTEM_PROMPT_SMART = `Eres un DJ experto. Basándote en las canciones que se han escuchado recientemente, sugiere canciones que mantengan el flujo musical.
 Responde SOLO con JSON: {"canciones": [{"titulo": "...", "artista": "...", "razon": "..."}]}
-Sugiere entre 8 y 12 canciones.`;
+Sugiere exactamente 5 canciones. No repitas las que ya se escucharon.`;
 
 // ── Tipos internos ───────────────────────────────────────────────
 
@@ -111,6 +107,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   const [isPlaying, setIsPlaying] = useState(false);
   const [searching, setSearching] = useState(false);
   const [historial, setHistorial] = useState<SolicitudProcesada[]>([]);
+  const [playedHistory, setPlayedHistory] = useState<Array<{titulo: string, artista: string}>>([]);
 
   // Refs para evitar closures stale en los intervalos
   const queueRef = useRef(queue);
@@ -119,6 +116,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   const searchingRef = useRef(searching);
   const currentSongRef = useRef(currentSong);
   const configRef = useRef(config);
+  const playedHistoryRef = useRef(playedHistory);
   const currentSongIdRef = useRef<number | null>(null);
   const rellenandoRef = useRef(false);
   const ultimoRefillRef = useRef(0);
@@ -135,6 +133,7 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   useEffect(() => { searchingRef.current = searching; }, [searching]);
   useEffect(() => { currentSongRef.current = currentSong; }, [currentSong]);
   useEffect(() => { configRef.current = config; }, [config]);
+  useEffect(() => { playedHistoryRef.current = playedHistory; }, [playedHistory]);
 
   // ── Helpers ──────────────────────────────────────────────────
 
@@ -329,6 +328,9 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
       setIsPlaying(true);
       setCurrentSong({ ...song, thumbnail: thumb });
 
+      // Actualizar historial de reproducción (últimas 5)
+      setPlayedHistory(prev => [...prev.slice(-4), { titulo: song.titulo, artista: song.artista }]);
+
       // Notificar al servidor
       try {
         const resp = await apiPost<NowPlayingResponse>('now_playing', {
@@ -457,14 +459,14 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
 
   // ── Rellenar buffer ──────────────────────────────────────────
 
-  const rellenarBuffer = useCallback(async () => {
+  const rellenarBuffer = useCallback(async (emergency = false) => {
     const cfg = configRef.current;
     if (!cfg.autoFill) return;
     if (rellenandoRef.current) return;
-    if (bufferRef.current.length >= BUFFER_MIN) return;
+    if (bufferRef.current.length >= BUFFER_REFILL && !emergency) return;
 
     const ahora = Date.now();
-    if (ahora - ultimoRefillRef.current < REFILL_COOLDOWN_MS) return;
+    if (!emergency && ahora - ultimoRefillRef.current < REFILL_COOLDOWN_MS) return;
 
     rellenandoRef.current = true;
     ultimoRefillRef.current = ahora;
@@ -475,59 +477,28 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
           (c) => `${c.titulo.toLowerCase()}|${c.artista.toLowerCase()}`
         )
       );
-
-      const nuevasBuffer: Song[] = [];
-
-      // 1. Canciones doradas del servidor
-      try {
-        const doradas = await apiGet<GoldSong[]>('gold_songs');
-        if (doradas && doradas.length > 0) {
-          // Shuffle
-          const shuffled = [...doradas].sort(() => Math.random() - 0.5);
-          const nDoradas = Math.floor(BUFFER_TARGET * 0.6);
-          for (const s of shuffled.slice(0, nDoradas)) {
-            const key = `${(s.title || '').toLowerCase()}|${(s.artist || '').toLowerCase()}`;
-            if (!existentes.has(key)) {
-              existentes.add(key);
-              nuevasBuffer.push({
-                titulo: s.title,
-                artista: s.artist,
-                razon: 'Exito dorado',
-                votos_net: 0,
-                solicitado_por: '',
-                priority: 'normal',
-                thumbnail: s.thumbnail_url || '',
-                texto_original: '',
-              });
-            }
-          }
-        }
-      } catch {
-        // No critico
+      // Incluir historial de reproducción en existentes para no repetir
+      for (const h of playedHistoryRef.current) {
+        existentes.add(`${h.titulo.toLowerCase()}|${h.artista.toLowerCase()}`);
       }
 
-      // 2. Complementar con Groq
-      if (nuevasBuffer.length < BUFFER_TARGET) {
-        let contextoDoradas = '';
-        try {
-          const doradas = await apiGet<GoldSong[]>('gold_songs');
-          if (doradas && doradas.length > 0) {
-            const ejemplos = doradas.slice(0, 8).map((s) => `${s.title} - ${s.artist}`);
-            contextoDoradas = `Canciones que han gustado mucho: ${ejemplos.join(', ')}. Sugiere cosas similares o del mismo estilo.`;
-          }
-        } catch {
-          // No critico
-        }
+      const nuevasBuffer: Song[] = [];
+      const cantidadNecesaria = BUFFER_MAX - bufferRef.current.length;
 
+      // Armar contexto del historial
+      const historialTexto = playedHistoryRef.current.length > 0
+        ? playedHistoryRef.current.map(h => `- ${h.titulo} - ${h.artista}`).join('\n')
+        : '(Ninguna aún - sugiere canciones populares variadas)';
+
+      const enColaTexto = [...existentes].slice(0, 15).join(', ');
+
+      for (let intento = 0; intento < 2 && nuevasBuffer.length < 3; intento++) {
         try {
           const messages: GroqMessage[] = [
-            {
-              role: 'system',
-              content: SYSTEM_PROMPT_BUFFER(cfg.preset, contextoDoradas),
-            },
+            { role: 'system', content: SYSTEM_PROMPT_SMART },
             {
               role: 'user',
-              content: `Sugiere canciones para el ambiente "${cfg.preset}". No repitas estas que ya estan en cola: ${[...existentes].slice(0, 15).join(', ')}`,
+              content: `Últimas canciones escuchadas:\n${historialTexto}\n\nNo sugieras estas que ya están en cola: ${enColaTexto}${intento > 0 ? '\n\nEl intento anterior no tuvo suficientes resultados válidos. Sugiere canciones más conocidas y populares.' : ''}`,
             },
           ];
 
@@ -535,32 +506,76 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
           const parsed: GroqResponse = JSON.parse(respuesta);
           const canciones = parsed.canciones || [];
 
+          // Validar cada sugerencia en YouTube
           for (const c of canciones) {
+            if (nuevasBuffer.length >= cantidadNecesaria) break;
+
             const t = c.titulo || '?';
             const a = c.artista || '?';
             const key = `${t.toLowerCase()}|${a.toLowerCase()}`;
-            if (!existentes.has(key)) {
-              existentes.add(key);
-              nuevasBuffer.push({
-                titulo: t,
-                artista: a,
-                razon: c.razon || '',
-                votos_net: 0,
-                solicitado_por: '',
-                priority: 'normal',
-                thumbnail: '',
-                texto_original: '',
-              });
+            if (existentes.has(key)) continue;
+
+            try {
+              const resultados = await youtubeSearch(`${t} ${a}`);
+              if (resultados && resultados.length > 0) {
+                existentes.add(key);
+                nuevasBuffer.push({
+                  titulo: t,
+                  artista: a,
+                  razon: c.razon || '',
+                  votos_net: 0,
+                  solicitado_por: '',
+                  priority: 'normal',
+                  thumbnail: resultados[0].thumbnail || '',
+                  texto_original: '',
+                });
+              } else {
+                log(`Descartada (no en YouTube): ${t} - ${a}`);
+              }
+            } catch {
+              log(`Error validando YouTube: ${t} - ${a}`);
             }
           }
         } catch (err) {
-          log(`Error Groq buffer: ${err}`);
+          log(`Error Groq buffer (intento ${intento + 1}): ${err}`);
+        }
+      }
+
+      // Fallback: si no hay suficientes, intentar con doradas
+      if (nuevasBuffer.length < 3) {
+        log('Buffer: pocas canciones validadas, usando doradas como fallback');
+        try {
+          const doradas = await apiGet<GoldSong[]>('gold_songs');
+          if (doradas && doradas.length > 0) {
+            const shuffled = [...doradas].sort(() => Math.random() - 0.5);
+            for (const s of shuffled) {
+              if (nuevasBuffer.length >= cantidadNecesaria) break;
+              const key = `${(s.title || '').toLowerCase()}|${(s.artist || '').toLowerCase()}`;
+              if (!existentes.has(key)) {
+                existentes.add(key);
+                nuevasBuffer.push({
+                  titulo: s.title,
+                  artista: s.artist,
+                  razon: 'Éxito dorado (fallback)',
+                  votos_net: 0,
+                  solicitado_por: '',
+                  priority: 'normal',
+                  thumbnail: s.thumbnail_url || '',
+                  texto_original: '',
+                });
+              }
+            }
+          }
+        } catch {
+          // No critico
         }
       }
 
       if (nuevasBuffer.length > 0) {
-        setBuffer((prev) => [...prev, ...nuevasBuffer]);
-        log(`Buffer rellenado: +${nuevasBuffer.length} canciones`);
+        setBuffer((prev) => [...prev, ...nuevasBuffer].slice(0, BUFFER_MAX));
+        log(`Buffer rellenado: +${nuevasBuffer.length} canciones (validadas en YouTube)`);
+      } else {
+        log('Warning: no se pudieron agregar canciones al buffer');
       }
     } catch (err) {
       log(`Error rellenando buffer: ${err}`);
@@ -679,8 +694,20 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
         }
 
         // Mantener buffer lleno en background
-        if (bufferRef.current.length < BUFFER_MIN) {
+        if (bufferRef.current.length <= BUFFER_REFILL) {
           rellenarBuffer();
+        }
+
+        // EMERGENCIA: cola y buffer vacíos, nada sonando, nada buscando
+        if (
+          queueRef.current.length === 0 &&
+          bufferRef.current.length === 0 &&
+          !searchingRef.current &&
+          !rellenandoRef.current &&
+          !isPlayingRef.current
+        ) {
+          log('EMERGENCIA: cola y buffer vacíos, rellenando sin cooldown');
+          rellenarBuffer(true);
         }
       } catch (err) {
         log(`Error auto tick: ${err}`);
