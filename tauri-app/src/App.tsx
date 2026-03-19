@@ -144,6 +144,7 @@ function App() {
             />
             <QueueView
               queue={dj.queue}
+              buffer={dj.buffer}
               onStatusMessage={handleStatusMessage}
               onRefresh={refreshQueue}
               onRemove={dj.removeFromQueue}

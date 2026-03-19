@@ -704,6 +704,25 @@
   flex-shrink: 0;
 }
 
+.queue-view__badge-source {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--purple);
+  flex-shrink: 0;
+}
+
+.queue-view__list--buffer {
+  margin-top: 16px;
+  opacity: 0.7;
+}
+
+.queue-view__list--buffer .queue-view__track {
+  border-left: 2px solid var(--bg-highlight);
+}
+
 .queue-view__track-artist {
   font-size: 12px;
   color: var(--text-subdued);
