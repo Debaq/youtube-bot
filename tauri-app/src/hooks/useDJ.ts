@@ -124,8 +124,9 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
   const ultimoRefillRef = useRef(0);
   const wasPlayingRef = useRef(false);
   const stoppedManuallyRef = useRef(false);
-  const reproducingLockRef = useRef(false); // Evita que múltiples reproducirSiguiente corran a la vez
-  const processedIdsRef = useRef(new Set<number>()); // IDs ya procesados para no repetir
+  const reproducingLockRef = useRef(false);
+  const processedIdsRef = useRef(new Set<number>());
+  const processedActionIdsRef = useRef(new Set<number>());
 
   // Mantener refs sincronizados
   useEffect(() => { queueRef.current = queue; }, [queue]);
@@ -760,11 +761,16 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
         });
 
         // 2. Leer acciones pendientes de la web (skip, pause, remove, etc.)
-        const acciones = await apiGet<Array<{ id: number; action: string; data: string }>>('pending_queue_actions');
-        if (acciones && acciones.length > 0) {
+        const todasAcciones = await apiGet<Array<{ id: number; action: string; data: string }>>('pending_queue_actions');
+        // Filtrar las que ya procesamos localmente
+        const acciones = (todasAcciones || []).filter(
+          (a) => !processedActionIdsRef.current.has(a.id)
+        );
+        if (acciones.length > 0) {
           const ids: number[] = [];
           for (const a of acciones) {
             ids.push(a.id);
+            processedActionIdsRef.current.add(a.id);
             let data: Record<string, unknown> = {};
             try { data = JSON.parse(a.data || '{}'); } catch { /* ignore */ }
 
