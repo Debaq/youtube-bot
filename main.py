@@ -177,6 +177,7 @@ class MusicBotApp:
         # Buffer interno: canciones pre-generadas listas para usar
         self.cola_buffer = []
         self.reproduciendo = False
+        self._buscando = False  # True mientras busca en YouTube (evita race con playcheck)
         self.auto_mode = tk.BooleanVar(value=True)
         self.auto_fill = tk.BooleanVar(value=True)
         self.show_video = tk.BooleanVar(value=False)
@@ -1276,6 +1277,7 @@ class MusicBotApp:
         query = f"{titulo} {artista}"
         self._set_status(f"Buscando: {query}...")
         self.reproduciendo = True
+        self._buscando = True
 
         def tarea():
             try:
@@ -1283,6 +1285,7 @@ class MusicBotApp:
                 bl = self.api.verificar_blacklist(titulo, artista)
                 if bl.get("blacklisted"):
                     self._set_status_safe(f"BLACKLIST - saltando: {titulo} - {artista}")
+                    self._buscando = False
                     self.reproduciendo = False
                     self.root.after(0, self._reproducir_siguiente)
                     return
@@ -1299,11 +1302,13 @@ class MusicBotApp:
                         for c in canciones:
                             c["solicitado_por"] = solicitado_por
                         self.root.after(0, self._agregar_a_cola, canciones)
+                    self._buscando = False
                     self.reproduciendo = False
                     self.root.after(0, self._reproducir_siguiente)
                     return
                 if not resultados:
                     self._set_status_safe(f"No encontrado en YouTube: {query}")
+                    self._buscando = False
                     self.reproduciendo = False
                     self.root.after(0, self._siguiente)
                     return
@@ -1311,6 +1316,7 @@ class MusicBotApp:
                 url = resultados[0]["url"]
                 thumb = thumbnail or resultados[0].get("thumbnail", "")
                 self.player.reproducir(url, titulo, artista)
+                self._buscando = False
                 resp = self.api.set_now_playing(titulo, artista, url, solicitado_por, thumbnail_url=thumb)
 
                 if resp:
@@ -1330,6 +1336,7 @@ class MusicBotApp:
 
             except Exception as e:
                 self._set_status_safe(f"Error: {e}")
+                self._buscando = False
                 self.reproduciendo = False
 
         threading.Thread(target=tarea, daemon=True).start()
@@ -1390,7 +1397,7 @@ class MusicBotApp:
 
     def _loop_playcheck(self):
         """Verifica cada 3s si terminó la canción para pasar a la siguiente."""
-        if self.reproduciendo and not self.player.esta_reproduciendo():
+        if self.reproduciendo and not self._buscando and not self.player.esta_reproduciendo():
             self._reproducir_siguiente()
         self.root.after(PLAYCHECK_MS, self._loop_playcheck)
 
