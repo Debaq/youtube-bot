@@ -102,6 +102,22 @@ type CmdResult<T> = Result<T, AppError>;
 // ---------------------------------------------------------------------------
 
 fn config_path() -> std::path::PathBuf {
+    // En dev, usar el directorio de trabajo (raíz del proyecto)
+    // En producción, junto al ejecutable
+    if cfg!(debug_assertions) {
+        let mut path = std::env::current_dir().unwrap_or_default();
+        path.push("config.json");
+        if path.exists() {
+            return path;
+        }
+        // Fallback: buscar en el padre (por si cwd es src-tauri)
+        let mut parent = std::env::current_dir().unwrap_or_default();
+        parent.pop();
+        parent.push("config.json");
+        if parent.exists() {
+            return parent;
+        }
+    }
     let mut path = std::env::current_exe().unwrap_or_default();
     path.pop();
     path.push("config.json");
@@ -341,7 +357,7 @@ async fn test_api_connection(app_config: State<'_, AppConfig>) -> CmdResult<Stri
         (guard.server_url.clone(), guard.api_key.clone())
     };
     if base_url.is_empty() {
-        return Err(AppError::Generic("server_url no configurado".into()));
+        return Err(AppError::Generic("server_url no configurado. Guarda la config primero.".into()));
     }
     let client = reqwest::Client::new();
     let url = format!("{}/api.php", base_url.trim_end_matches('/'));
@@ -351,10 +367,15 @@ async fn test_api_connection(app_config: State<'_, AppConfig>) -> CmdResult<Stri
         .header("X-API-Key", &api_key)
         .timeout(std::time::Duration::from_secs(5))
         .send()
-        .await?;
+        .await
+        .map_err(|e| AppError::Generic(format!("No se pudo conectar a {url}: {e}")))?;
     let status = resp.status();
-    let body: Value = resp.json().await.unwrap_or(Value::Null);
-    Ok(format!("HTTP {} - {}", status.as_u16(), serde_json::to_string_pretty(&body).unwrap_or_default()))
+    let text = resp.text().await.unwrap_or_default();
+    if status.is_success() {
+        Ok(format!("OK (HTTP {}) - {}", status.as_u16(), &text[..text.len().min(100)]))
+    } else {
+        Err(AppError::Generic(format!("HTTP {} en {url} - {}", status.as_u16(), &text[..text.len().min(200)])))
+    }
 }
 
 #[tauri::command]
