@@ -1,9 +1,9 @@
 import { useCallback } from 'react';
-import type { SolicitudProcesada } from '../types';
+import type { Song, SolicitudProcesada } from '../types';
 
 interface RequestsPanelProps {
   historial: SolicitudProcesada[];
-  onAddToQueue: (songs: typeof historial[0]['canciones']) => void;
+  onAddToQueue: (songs: Song[]) => void;
   onStatusMessage: (msg: string) => void;
 }
 
