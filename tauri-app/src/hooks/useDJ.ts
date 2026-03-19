@@ -333,11 +333,12 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
           requested_by: song.solicitado_por || '',
           thumbnail_url: thumb,
         });
+        log(`now_playing resp: ${JSON.stringify(resp)}`);
         if (resp && resp.id) {
           currentSongIdRef.current = resp.id;
         }
-      } catch {
-        // No critico
+      } catch (err) {
+        log(`Error now_playing: ${err}`);
       }
 
       log(`Reproduciendo: ${song.titulo} - ${song.artista}`);
