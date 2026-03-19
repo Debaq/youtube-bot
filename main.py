@@ -212,7 +212,10 @@ class MusicBotApp:
         api_key = self.cfg.get("groq_api_key", "")
         if api_key:
             model = self.cfg.get("groq_model", "llama-3.3-70b-versatile")
-            self.groq = GroqService(api_key, model)
+            try:
+                self.groq = GroqService(api_key, model)
+            except Exception:
+                self.groq = None
 
     # ── GUI ──────────────────────────────────────────────────────────
 

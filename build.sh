@@ -68,6 +68,8 @@ ARGS=(
     --hidden-import=bs4
     --hidden-import=requests
     --hidden-import=tkinter
+    --hidden-import=pystray
+    --hidden-import=PIL
     --collect-all=groq
     --collect-all=yt_dlp
 )
@@ -79,6 +81,7 @@ fi
 
 # Separador de ruta en --add-data: ; en Windows, : en Linux/Mac
 if [ "$OS" = "windows" ]; then
+    :
 fi
 
 echo ""
