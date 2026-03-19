@@ -1,51 +1,44 @@
 import { useCallback } from 'react';
 import type { Song } from '../types';
-import { removeSong, moveSongUp, voteSong } from '../api';
 
 interface QueueViewProps {
   queue: Song[];
   onStatusMessage: (msg: string) => void;
   onRefresh: () => void;
+  onRemove: (index: number) => void;
+  onMoveUp: (index: number) => void;
+  onVote: (index: number, delta: number) => void;
 }
 
-export default function QueueView({ queue, onStatusMessage, onRefresh }: QueueViewProps) {
+export default function QueueView({
+  queue,
+  onStatusMessage,
+  onRemove,
+  onMoveUp,
+  onVote,
+}: QueueViewProps) {
   const handleRemove = useCallback(
-    async (index: number) => {
-      try {
-        await removeSong(index);
-        onStatusMessage(`Cancion #${index + 1} eliminada de la cola`);
-        onRefresh();
-      } catch (err) {
-        onStatusMessage(`Error al eliminar: ${err}`);
-      }
+    (index: number) => {
+      onRemove(index);
+      onStatusMessage(`Cancion #${index + 1} eliminada de la cola`);
     },
-    [onStatusMessage, onRefresh]
+    [onRemove, onStatusMessage]
   );
 
   const handleMoveUp = useCallback(
-    async (index: number) => {
+    (index: number) => {
       if (index === 0) return;
-      try {
-        await moveSongUp(index);
-        onStatusMessage(`Cancion movida hacia arriba`);
-        onRefresh();
-      } catch (err) {
-        onStatusMessage(`Error al mover: ${err}`);
-      }
+      onMoveUp(index);
+      onStatusMessage('Cancion movida hacia arriba');
     },
-    [onStatusMessage, onRefresh]
+    [onMoveUp, onStatusMessage]
   );
 
   const handleVote = useCallback(
-    async (index: number, delta: number) => {
-      try {
-        await voteSong(index, delta);
-        onRefresh();
-      } catch (err) {
-        onStatusMessage(`Error al votar: ${err}`);
-      }
+    (index: number, delta: number) => {
+      onVote(index, delta);
     },
-    [onStatusMessage, onRefresh]
+    [onVote]
   );
 
   if (queue.length === 0) {

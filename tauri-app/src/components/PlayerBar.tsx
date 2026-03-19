@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Song } from '../types';
-import { playerStop, skipSong, playerSetVolume } from '../api';
+import { playerSetVolume } from '../api';
 
 interface PlayerBarProps {
   currentSong: Song | null;
@@ -8,6 +8,8 @@ interface PlayerBarProps {
   volume: number;
   onVolumeChange: (vol: number) => void;
   onStatusMessage: (msg: string) => void;
+  onSkip: () => void;
+  onStop: () => void;
 }
 
 export default function PlayerBar({
@@ -16,6 +18,8 @@ export default function PlayerBar({
   volume,
   onVolumeChange,
   onStatusMessage,
+  onSkip,
+  onStop,
 }: PlayerBarProps) {
   const [localVolume, setLocalVolume] = useState(volume);
   const [muted, setMuted] = useState(false);
@@ -25,23 +29,15 @@ export default function PlayerBar({
     setLocalVolume(volume);
   }, [volume]);
 
-  const handleStop = useCallback(async () => {
-    try {
-      await playerStop();
-      onStatusMessage('Reproduccion detenida');
-    } catch (err) {
-      onStatusMessage(`Error al detener: ${err}`);
-    }
-  }, [onStatusMessage]);
+  const handleSkip = useCallback(() => {
+    onSkip();
+    onStatusMessage('Cancion saltada');
+  }, [onSkip, onStatusMessage]);
 
-  const handleSkip = useCallback(async () => {
-    try {
-      await skipSong();
-      onStatusMessage('Cancion saltada');
-    } catch (err) {
-      onStatusMessage(`Error al saltar: ${err}`);
-    }
-  }, [onStatusMessage]);
+  const handleStop = useCallback(() => {
+    onStop();
+    onStatusMessage('Reproduccion detenida');
+  }, [onStop, onStatusMessage]);
 
   const handleVolumeChange = useCallback(
     async (val: number) => {
@@ -69,7 +65,7 @@ export default function PlayerBar({
 
   return (
     <div className="player-bar">
-      {/* Izquierda: Info de la canción */}
+      {/* Izquierda: Info de la cancion */}
       <div className="player-bar__song">
         {currentSong?.thumbnail ? (
           <img

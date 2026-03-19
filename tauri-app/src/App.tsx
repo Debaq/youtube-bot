@@ -1,13 +1,11 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import './App.css';
-import type { Song, Solicitud, AppState } from './types';
+import type { Solicitud, AppState } from './types';
+import { DJ_PRESETS } from './types';
 import { usePolling } from './hooks/usePolling';
+import { useDJ } from './hooks/useDJ';
 import {
-  getQueue,
-  getCurrentSong,
-  playerIsPlaying,
   getSolicitudes,
-  getLogs,
   getServerVolume,
   playerSetVolume,
   playerSetVideo,
@@ -31,6 +29,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [volume, setVolume] = useState(80);
   const [localLogs, setLocalLogs] = useState<string[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState(DJ_PRESETS[0].name);
 
   // ── Estado de controles ──────────────────────────────────────
   const [appState, setAppState] = useState<AppState>({
@@ -43,19 +42,26 @@ function App() {
     trayEnabled: false,
   });
 
-  // ── Polling: cola ────────────────────────────────────────────
-  const fetchQueue = useCallback(() => getQueue(), []);
-  const { data: queue, refresh: refreshQueue } = usePolling<Song[]>(fetchQueue, 3000);
+  // ── Handlers ─────────────────────────────────────────────────
+  const handleStatusMessage = useCallback((msg: string) => {
+    setStatusMessage(msg);
+    setLocalLogs((prev) => [
+      ...prev,
+      `[${new Date().toLocaleTimeString()}] ${msg}`,
+    ]);
+  }, []);
 
-  // ── Polling: canción actual ──────────────────────────────────
-  const fetchCurrentSong = useCallback(() => getCurrentSong(), []);
-  const { data: currentSong } = usePolling<Song | null>(fetchCurrentSong, 2000);
+  // ── DJ Hook: el cerebro de la app ────────────────────────────
+  const dj = useDJ({
+    autoMode: appState.autoMode,
+    autoFill: appState.autoFill,
+    preset: selectedPreset,
+    volume,
+    videoEnabled: appState.videoEnabled,
+    onStatusMessage: handleStatusMessage,
+  });
 
-  // ── Polling: estado de reproducción ──────────────────────────
-  const fetchIsPlaying = useCallback(() => playerIsPlaying(), []);
-  const { data: isPlaying } = usePolling<boolean>(fetchIsPlaying, 2000);
-
-  // ── Polling: solicitudes ─────────────────────────────────────
+  // ── Polling: solicitudes (solo para mostrar en el panel) ─────
   const fetchSolicitudes = useCallback(() => getSolicitudes(), []);
   const { data: solicitudes, refresh: refreshSolicitudes } = usePolling<Solicitud[]>(
     fetchSolicitudes,
@@ -73,32 +79,28 @@ function App() {
     setVolume(vol);
     playerSetVolume(vol).catch(() => {});
     playerSetVideo(serverVolume.video).catch(() => {});
+
     setAppState((prev) => ({
       ...prev,
       autoMode: serverVolume.auto_mode ?? prev.autoMode,
       autoFill: serverVolume.auto_fill ?? prev.autoFill,
       videoEnabled: serverVolume.video ?? prev.videoEnabled,
     }));
-  }, [serverVolume]);
 
-  // ── Polling: logs ────────────────────────────────────────────
-  const fetchLogs = useCallback(() => getLogs(), []);
-  const { data: remoteLogs } = usePolling<string[]>(fetchLogs, 5000);
+    // Sincronizar preset si cambio en la web
+    if (serverVolume.preset && serverVolume.preset !== selectedPreset) {
+      const presetExists = DJ_PRESETS.some((p) => p.name === serverVolume.preset);
+      if (presetExists) {
+        setSelectedPreset(serverVolume.preset);
+        handleStatusMessage(`Preset cambiado desde web: ${serverVolume.preset}`);
+      }
+    }
+  }, [serverVolume, selectedPreset, handleStatusMessage]);
 
   // ── Logs combinados ─────────────────────────────────────────
   const allLogs = useMemo(() => {
-    const remote = remoteLogs || [];
-    return [...remote, ...localLogs];
-  }, [remoteLogs, localLogs]);
-
-  // ── Handlers ─────────────────────────────────────────────────
-  const handleStatusMessage = useCallback((msg: string) => {
-    setStatusMessage(msg);
-    setLocalLogs((prev) => [
-      ...prev,
-      `[${new Date().toLocaleTimeString()}] ${msg}`,
-    ]);
-  }, []);
+    return [...localLogs];
+  }, [localLogs]);
 
   const handleAppStateChange = useCallback((patch: Partial<AppState>) => {
     setAppState((prev) => ({ ...prev, ...patch }));
@@ -119,8 +121,18 @@ function App() {
     setLocalLogs([]);
   }, []);
 
-  // ── Conectado (heurístico: si queue no es null, hay conexión)
-  const connected = queue !== null;
+  const handlePresetChange = useCallback((presetName: string) => {
+    setSelectedPreset(presetName);
+  }, []);
+
+  // ── Refresh de cola (ahora usa dj.setQueue para forzar re-render)
+  const refreshQueue = useCallback(() => {
+    // El DJ maneja la cola, no necesitamos refetch
+    dj.setQueue((prev) => [...prev]);
+  }, [dj]);
+
+  // ── Conectado (heurístico: si el DJ tiene algo o no hay error)
+  const connected = true;
 
   // ── Render ───────────────────────────────────────────────────
   const renderMainContent = () => {
@@ -128,16 +140,23 @@ function App() {
       case 'queue':
         return (
           <>
-            <PresetSelector onStatusMessage={handleStatusMessage} />
+            <PresetSelector
+              onStatusMessage={handleStatusMessage}
+              selectedPreset={selectedPreset}
+              onPresetChange={handlePresetChange}
+            />
             <ControlsBar
               state={appState}
               onStateChange={handleAppStateChange}
               onStatusMessage={handleStatusMessage}
             />
             <QueueView
-              queue={queue || []}
+              queue={dj.queue}
               onStatusMessage={handleStatusMessage}
               onRefresh={refreshQueue}
+              onRemove={dj.removeFromQueue}
+              onMoveUp={dj.moveUp}
+              onVote={dj.voteInQueue}
             />
           </>
         );
@@ -159,23 +178,30 @@ function App() {
   return (
     <div className="app">
       <Sidebar
-        currentSong={currentSong ?? null}
+        currentSong={dj.currentSong}
         activeView={activeView}
         onViewChange={handleViewChange}
         logsCount={allLogs.length}
       />
 
       <main className="app__main">
-        <StatusBar message={statusMessage} connected={connected} />
+        <StatusBar
+          message={statusMessage}
+          connected={connected}
+          searching={dj.searching}
+          bufferCount={dj.buffer.length}
+        />
         <div className="app__content">{renderMainContent()}</div>
       </main>
 
       <PlayerBar
-        currentSong={currentSong ?? null}
-        isPlaying={isPlaying ?? false}
+        currentSong={dj.currentSong}
+        isPlaying={dj.isPlaying}
         volume={volume}
         onVolumeChange={setVolume}
         onStatusMessage={handleStatusMessage}
+        onSkip={dj.skip}
+        onStop={dj.stop}
       />
 
       <SettingsDialog
