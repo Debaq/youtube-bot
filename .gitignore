@@ -1,0 +1,10 @@
+.env
+votes.json
+__pycache__/
+*.pyc
+.venv/
+web/db/
+dist/
+build/
+*.spec
+.claude/
