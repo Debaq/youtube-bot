@@ -9,11 +9,54 @@ import tkinter as tk
 from datetime import datetime, date
 from tkinter import ttk, messagebox
 
-from dotenv import load_dotenv
-
 from services import GroqService, WebScraper, MusicPlayer, PHPApiClient, WeatherService
 
-load_dotenv()
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+CONFIG_DEFAULTS = {
+    "server_url": "http://localhost:8080",
+    "api_key": "",
+    "groq_api_key": "",
+    "groq_model": "llama-3.3-70b-versatile",
+    "weather_city": "Valdivia",
+}
+
+
+def load_config():
+    """Carga config desde config.json, con fallback a .env para migración."""
+    cfg = dict(CONFIG_DEFAULTS)
+    if os.path.isfile(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                saved = json.load(f)
+            cfg.update({k: v for k, v in saved.items() if k in cfg})
+        except Exception:
+            pass
+    else:
+        # Migración desde .env
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+        env_map = {
+            "VOTING_SERVER_URL": "server_url",
+            "API_KEY": "api_key",
+            "GROQ_API_KEY": "groq_api_key",
+            "GROQ_MODEL": "groq_model",
+            "WEATHER_CITY": "weather_city",
+        }
+        for env_key, cfg_key in env_map.items():
+            val = os.getenv(env_key, "")
+            if val:
+                cfg[cfg_key] = val
+    return cfg
+
+
+def save_config(cfg):
+    """Guarda config en config.json."""
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
 
 POLL_MS = 15_000        # Cada 15s revisa solicitudes nuevas
 PLAYCHECK_MS = 3_000    # Cada 3s revisa si terminó la canción
@@ -94,13 +137,15 @@ class MusicBotApp:
         self.root.geometry("950x800")
         self.root.minsize(850, 700)
 
+        self.cfg = load_config()
+
         self.scraper = WebScraper()
         self.player = MusicPlayer()
-        self.weather = WeatherService(os.getenv("WEATHER_CITY", "Valdivia"))
+        self.weather = WeatherService(self.cfg["weather_city"])
         self.groq = None
         self.api = PHPApiClient(
-            os.getenv("VOTING_SERVER_URL", "http://localhost:8080"),
-            os.getenv("API_KEY", "cambiar_esta_clave_secreta_2024"),
+            self.cfg["server_url"],
+            self.cfg["api_key"],
         )
 
         # Cola de reproducción visible (máx 1 canción en modo auto)
@@ -122,6 +167,10 @@ class MusicBotApp:
         self._init_groq()
         self._crear_gui()
 
+        # Si no hay config guardada, abrir configuración
+        if not os.path.isfile(CONFIG_FILE):
+            self.root.after(100, self._abrir_config)
+
         # Loop que vigila si terminó la canción
         self._loop_playcheck()
         # Loop de sincronización de cola al servidor
@@ -133,9 +182,9 @@ class MusicBotApp:
         self.root.after(2000, self._auto_start)
 
     def _init_groq(self):
-        api_key = os.getenv("GROQ_API_KEY")
+        api_key = self.cfg.get("groq_api_key", "")
         if api_key:
-            model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+            model = self.cfg.get("groq_model", "llama-3.3-70b-versatile")
             self.groq = GroqService(api_key, model)
 
     # ── GUI ──────────────────────────────────────────────────────────
@@ -329,6 +378,9 @@ class MusicBotApp:
             frame, text="Animo", variable=self.auto_mood,
         ).pack(side=tk.LEFT, padx=(10, 0))
 
+        ttk.Button(frame, text="Config", command=self._abrir_config).pack(
+            side=tk.RIGHT, padx=(0, 5)
+        )
         ttk.Button(frame, text="Limpiar cola", command=self._limpiar_cola).pack(
             side=tk.RIGHT
         )
@@ -388,6 +440,66 @@ class MusicBotApp:
         ttk.Label(
             self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W
         ).grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 5))
+
+    # ── Configuración ─────────────────────────────────────────────
+
+    def _abrir_config(self):
+        """Abre ventana de configuración de conexión y API keys."""
+        win = tk.Toplevel(self.root)
+        win.title("Configuracion")
+        win.geometry("480x320")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        main_frame = ttk.Frame(win, padding=16)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        campos = [
+            ("Servidor URL", "server_url", False),
+            ("API Key servidor", "api_key", False),
+            ("Groq API Key", "groq_api_key", True),
+            ("Groq Modelo", "groq_model", False),
+            ("Ciudad (clima)", "weather_city", False),
+        ]
+
+        entries = {}
+        for i, (label, key, oculto) in enumerate(campos):
+            ttk.Label(main_frame, text=label, font=("", 9)).grid(
+                row=i, column=0, sticky="w", pady=4
+            )
+            var = tk.StringVar(value=self.cfg.get(key, ""))
+            entry = ttk.Entry(main_frame, textvariable=var, width=42,
+                              show="*" if oculto else "")
+            entry.grid(row=i, column=1, sticky="ew", padx=(10, 0), pady=4)
+            entries[key] = var
+
+        main_frame.columnconfigure(1, weight=1)
+
+        def guardar():
+            for key, var in entries.items():
+                self.cfg[key] = var.get().strip()
+            save_config(self.cfg)
+            # Aplicar cambios en caliente
+            self.api = PHPApiClient(self.cfg["server_url"], self.cfg["api_key"])
+            self.weather.ciudad = self.cfg["weather_city"]
+            self.weather._cache = None
+            self._init_groq()
+            self._set_status("Configuracion guardada")
+            win.destroy()
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=len(campos), column=0, columnspan=2, pady=(16, 0))
+        ttk.Button(btn_frame, text="Guardar", command=guardar).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancelar", command=win.destroy).pack(side=tk.LEFT, padx=5)
+
+        # Focus en el primer campo vacío
+        for key, var in entries.items():
+            if not var.get():
+                for child in main_frame.winfo_children():
+                    if isinstance(child, ttk.Entry) and child.cget("textvariable"):
+                        pass
+                break
 
     # ── Helpers ──────────────────────────────────────────────────────
 
