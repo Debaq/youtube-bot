@@ -136,6 +136,43 @@ fn read_config_from_disk() -> Config {
 
 const MPV_SOCKET: &str = "/tmp/musicbot-mpv.sock";
 
+/// Busca un ejecutable en PATH y rutas comunes
+fn find_executable(name: &str) -> String {
+    // Primero intentar que el SO lo resuelva
+    if let Ok(output) = Command::new("which").arg(name).output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return path;
+            }
+        }
+    }
+    // Rutas comunes como fallback
+    let candidates = [
+        format!("/usr/bin/{name}"),
+        format!("/usr/local/bin/{name}"),
+        format!("/home/{}/.local/bin/{name}", std::env::var("USER").unwrap_or_default()),
+    ];
+    for c in &candidates {
+        if std::path::Path::new(c).exists() {
+            return c.clone();
+        }
+    }
+    // Si pip lo instaló en algún venv, buscar yt-dlp con pipx path
+    if name == "yt-dlp" {
+        if let Ok(output) = Command::new("pip").args(["show", "yt-dlp", "--quiet"]).output() {
+            if output.status.success() {
+                // pip install --user pone en ~/.local/bin
+                let user_bin = format!("/home/{}/.local/bin/yt-dlp", std::env::var("USER").unwrap_or_default());
+                if std::path::Path::new(&user_bin).exists() {
+                    return user_bin;
+                }
+            }
+        }
+    }
+    name.to_string()
+}
+
 fn mpv_send_command(args: &[&str]) -> Result<(), AppError> {
     use std::os::unix::net::UnixStream;
 
@@ -412,7 +449,7 @@ async fn test_groq_connection(app_config: State<'_, AppConfig>) -> CmdResult<Str
 
 #[tauri::command]
 async fn test_youtube() -> CmdResult<String> {
-    let output = Command::new("yt-dlp")
+    let output = Command::new(&find_executable("yt-dlp"))
         .args(["--version"])
         .output();
     match output {
@@ -427,7 +464,7 @@ async fn test_youtube() -> CmdResult<String> {
 
 #[tauri::command]
 async fn test_mpv() -> CmdResult<String> {
-    let output = Command::new("mpv")
+    let output = Command::new(&find_executable("mpv"))
         .args(["--version"])
         .output();
     match output {
@@ -450,7 +487,7 @@ async fn test_mpv() -> CmdResult<String> {
 
 #[tauri::command]
 async fn youtube_search(query: String) -> CmdResult<Vec<YoutubeResult>> {
-    let output = Command::new("yt-dlp")
+    let output = Command::new(&find_executable("yt-dlp"))
         .args([
             "--dump-json",
             "--flat-playlist",
@@ -542,7 +579,7 @@ fn youtube_play(
         args.push("--no-video".to_string());
     }
 
-    let child = Command::new("mpv").args(&args).spawn()?;
+    let child = Command::new(&find_executable("mpv")).args(&args).spawn()?;
 
     if let Ok(mut guard) = mpv_state.0.lock() {
         *guard = Some(child);
