@@ -16,12 +16,61 @@ HAS_AF_UNIX = hasattr(socket, "AF_UNIX")
 
 
 class GroqService:
-    """Cliente para la API de Groq (LLMs)."""
+    """Cliente para la API de Groq (LLMs) con auto-switch de modelo en rate limit."""
 
     def __init__(self, api_key, model="llama-3.3-70b-versatile"):
         from groq import Groq
         self.client = Groq(api_key=api_key)
         self.model = model
+        self._modelos_disponibles = []
+        self._modelo_original = model
+        self.ultimo_cambio = ""  # Info del último cambio de modelo
+
+    # Modelos que NO sirven para chat completion
+    _EXCLUIR = {"whisper", "prompt-guard", "compound", "orpheus", "safeguard"}
+
+    def listar_modelos(self):
+        """Obtiene modelos de Groq aptos para chat completion."""
+        try:
+            modelos = self.client.models.list()
+            self._modelos_disponibles = [
+                m.id for m in modelos.data
+                if m.active and not any(ex in m.id for ex in self._EXCLUIR)
+            ]
+            return self._modelos_disponibles
+        except Exception:
+            return []
+
+    def _llamar_con_retry(self, messages, temperature=0.8, max_tokens=1024, response_format=None):
+        """Llama a Groq con auto-switch de modelo si hay rate limit."""
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+
+        try:
+            return self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                # Intentar con otro modelo
+                if not self._modelos_disponibles:
+                    self.listar_modelos()
+                modelo_anterior = self.model
+                for alt in self._modelos_disponibles:
+                    if alt != self.model:
+                        try:
+                            kwargs["model"] = alt
+                            resp = self.client.chat.completions.create(**kwargs)
+                            self.ultimo_cambio = f"Rate limit en {modelo_anterior}, cambiado a {alt}"
+                            self.model = alt
+                            return resp
+                        except Exception:
+                            continue
+            raise
 
     def comentar_cancion(self, titulo, artista, votos_up=0, votos_down=0):
         """Genera un comentario corto y divertido del DJ sobre la canción actual."""
@@ -35,8 +84,7 @@ class GroqService:
 
         user_msg = f"Canción: {titulo} - {artista}. Votos: +{votos_up} -{votos_down}"
 
-        response = self.client.chat.completions.create(
-            model=self.model,
+        response = self._llamar_con_retry(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
@@ -76,15 +124,14 @@ class GroqService:
 
         user_msg = "\n\n".join(partes) if partes else "Sugiere música variada y popular."
 
-        response = self.client.chat.completions.create(
-            model=self.model,
+        response = self._llamar_con_retry(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ],
-            response_format={"type": "json_object"},
             temperature=0.8,
             max_tokens=1024,
+            response_format={"type": "json_object"},
         )
 
         return json.loads(response.choices[0].message.content)

@@ -72,12 +72,12 @@ def save_config(cfg):
 
 POLL_MS = 15_000        # Cada 15s revisa solicitudes nuevas
 PLAYCHECK_MS = 3_000    # Cada 3s revisa si terminó la canción
-VOTECHECK_MS = 8_000    # Cada 8s consulta votos y reordena cola
+VOTECHECK_MS = 30_000   # Cada 30s consulta votos y reordena cola
 SKIP_DOWNVOTES = 2      # Downvotes absolutos para saltar canción
 COMMENT_DELAY_MS = 5_000  # Delay antes de mostrar comentario IA
 BUFFER_MIN = 5          # Rellenar buffer cuando tiene menos de esto
 BUFFER_TARGET = 15      # Cantidad objetivo de canciones en buffer
-SYNC_MS = 10_000        # Cada 10s sincroniza cola al servidor
+SYNC_MS = 30_000        # Cada 30s sincroniza cola al servidor
 ENDOFDAY_HOUR = 20      # Hora de generar playlist del día (20 = 8 PM)
 
 # Comandos reconocidos desde solicitudes de usuarios
@@ -182,6 +182,11 @@ class MusicBotApp:
         self.show_video = tk.BooleanVar(value=False)
         self.current_song_id = None  # ID de now_playing actual
         self._rellenando_buffer = False  # Evita llamadas concurrentes al API
+        self._ultimo_refill = 0  # Timestamp del último rellenado
+        self._log_file = os.path.join(
+            os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)),
+            "musicbot.log"
+        )
         self._playlist_fecha = None  # Fecha de la última playlist generada
         self._streak = 0  # Racha de canciones sin downvotes
         self._schedule = []  # Schedule programado
@@ -499,7 +504,6 @@ class MusicBotApp:
             ("Servidor URL", "server_url", False),
             ("API Key servidor", "api_key", False),
             ("Groq API Key", "groq_api_key", True),
-            ("Groq Modelo", "groq_model", False),
             ("Ciudad (clima)", "weather_city", False),
         ]
 
@@ -513,6 +517,24 @@ class MusicBotApp:
                               show="*" if oculto else "")
             entry.grid(row=i, column=1, sticky="ew", padx=(10, 0), pady=4)
             entries[key] = var
+
+        # Selector de modelo Groq (combobox)
+        row_modelo = len(campos)
+        ttk.Label(main_frame, text="Groq Modelo", font=("", 9)).grid(
+            row=row_modelo, column=0, sticky="w", pady=4
+        )
+        modelo_var = tk.StringVar(value=self.cfg.get("groq_model", "llama-3.3-70b-versatile"))
+        modelo_combo = ttk.Combobox(main_frame, textvariable=modelo_var, width=40)
+        modelo_combo.grid(row=row_modelo, column=1, sticky="ew", padx=(10, 0), pady=4)
+        entries["groq_model"] = modelo_var
+
+        # Cargar modelos en background
+        def cargar_modelos():
+            if self.groq:
+                modelos = self.groq.listar_modelos()
+                if modelos:
+                    win.after(0, lambda: modelo_combo.config(values=modelos))
+        threading.Thread(target=cargar_modelos, daemon=True).start()
 
         main_frame.columnconfigure(1, weight=1)
 
@@ -529,7 +551,7 @@ class MusicBotApp:
             win.destroy()
 
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=len(campos), column=0, columnspan=2, pady=(16, 0))
+        btn_frame.grid(row=len(campos) + 1, column=0, columnspan=2, pady=(16, 0))
         ttk.Button(btn_frame, text="Guardar", command=guardar).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Cancelar", command=win.destroy).pack(side=tk.LEFT, padx=5)
 
@@ -543,8 +565,23 @@ class MusicBotApp:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
+    def _log(self, msg):
+        try:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self._log_file, "a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {msg}\n")
+        except Exception:
+            pass
+
+    def _check_groq_cambio(self):
+        """Loguea si Groq cambió de modelo por rate limit."""
+        if self.groq and self.groq.ultimo_cambio:
+            self._set_status(self.groq.ultimo_cambio)
+            self.groq.ultimo_cambio = ""
+
     def _set_status(self, msg):
         self.status_var.set(msg)
+        self._log(msg)
 
     def _set_status_safe(self, msg):
         self.root.after(0, lambda: self._set_status(msg))
@@ -864,20 +901,23 @@ class MusicBotApp:
             cancion = self.cola_buffer.pop(0)
             self._agregar_a_cola([cancion])
             self._set_status(f"Buffer: {len(self.cola_buffer)} canciones restantes")
-            # Si el buffer está bajo, rellenar en background
-            if len(self.cola_buffer) < BUFFER_MIN:
-                self._rellenar_buffer()
 
     def _rellenar_buffer(self):
         """Rellena el buffer interno con canciones (doradas + horario + Groq)."""
+        import time
         if not self.auto_fill.get() or not self.groq:
             return
         if self._rellenando_buffer:
             return
         if len(self.cola_buffer) >= BUFFER_MIN:
             return
+        # Cooldown: no rellenar más de 1 vez por minuto
+        ahora = time.time()
+        if ahora - self._ultimo_refill < 60:
+            return
 
         self._rellenando_buffer = True
+        self._ultimo_refill = ahora
 
         def tarea():
             try:
@@ -918,6 +958,7 @@ class MusicBotApp:
                 # Complementar con Groq
                 if len(self.cola_buffer) < BUFFER_TARGET:
                     resultado = self.groq.sugerir_musica(self._get_prompt_dj(), [])
+                    self._check_groq_cambio()
                     canciones = resultado.get("canciones", [])
                     if canciones:
                         nuevas = [c for c in canciones if (c.get("titulo", "?").lower(), c.get("artista", "?").lower()) not in existentes]
@@ -932,18 +973,14 @@ class MusicBotApp:
         threading.Thread(target=tarea, daemon=True).start()
 
     def _auto_rellenar_cola(self):
-        """Si la cola está vacía, toma del buffer o rellena el buffer."""
+        """Si la cola está vacía, toma del buffer."""
         if not self.auto_fill.get():
             return
         if self.cola:
             return
 
         if self.cola_buffer:
-            # Tomar una del buffer
             self._mover_una_del_buffer()
-        else:
-            # Buffer vacío, rellenar
-            self._rellenar_buffer()
 
     # ── Modo auto ────────────────────────────────────────────────────
 
@@ -1006,6 +1043,7 @@ class MusicBotApp:
                     # Solo el resto va a Groq
                     if para_groq and self.groq:
                         resultado = self.groq.sugerir_musica("", para_groq)
+                        self._check_groq_cambio()
                         canciones = resultado.get("canciones", [])
 
                         if canciones:
@@ -1152,6 +1190,7 @@ class MusicBotApp:
                 if para_groq:
                     self._set_status_safe("Consultando IA...")
                     resultado = self.groq.sugerir_musica("", para_groq)
+                    self._check_groq_cambio()
                     canciones = resultado.get("canciones", [])
 
                     if canciones:
@@ -1197,6 +1236,7 @@ class MusicBotApp:
 
                 self._set_status_safe("Consultando IA...")
                 resultado = self.groq.sugerir_musica(contexto, solicitudes)
+                self._check_groq_cambio()
                 canciones = resultado.get("canciones", [])
 
                 if solicitudes:
@@ -1253,6 +1293,7 @@ class MusicBotApp:
                     self._set_status_safe(f"No encontrado directo, consultando IA: {texto_original}")
                     solicitud_fallback = [{"texto": texto_original, "email": solicitado_por}]
                     resultado = self.groq.sugerir_musica("", solicitud_fallback)
+                    self._check_groq_cambio()
                     canciones = resultado.get("canciones", [])
                     if canciones:
                         for c in canciones:
@@ -1390,7 +1431,7 @@ class MusicBotApp:
                 pass
 
         threading.Thread(target=tarea, daemon=True).start()
-        self.root.after(5000, self._loop_volume)
+        self.root.after(15_000, self._loop_volume)
 
     # ── Sincronización cola <-> servidor ─────────────────────────────
 
