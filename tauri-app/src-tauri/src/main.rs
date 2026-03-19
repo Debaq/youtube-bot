@@ -230,6 +230,9 @@ async fn api_post(action: String, data: Value, app_config: State<'_, AppConfig>)
     let client = reqwest::Client::new();
     let url = format!("{}/api.php?action={}", base_url.trim_end_matches('/'), action);
 
+    // Debug: ver qué llega de Tauri
+    println!("[api_post] action={action}, data={data}");
+
     let mut payload = match data.clone() {
         Value::Object(map) => map,
         _ => serde_json::Map::new(),
@@ -238,6 +241,7 @@ async fn api_post(action: String, data: Value, app_config: State<'_, AppConfig>)
 
     let body_str = serde_json::to_string(&Value::Object(payload.clone()))
         .unwrap_or_default();
+    println!("[api_post] body_str={body_str}");
 
     let resp = client
         .post(&url)
