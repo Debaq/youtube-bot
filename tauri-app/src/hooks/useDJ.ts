@@ -248,11 +248,16 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
         }
       }
 
-      // Las de priority=now van al inicio
+      // priority=now al inicio, solicitudes de usuarios antes que IA del buffer
       const ahora = nuevas.filter((c) => c.priority === 'now');
-      const resto = nuevas.filter((c) => c.priority !== 'now');
+      const solicitadas = nuevas.filter((c) => c.priority !== 'now' && c.solicitado_por);
+      const resto = nuevas.filter((c) => c.priority !== 'now' && !c.solicitado_por);
 
-      return [...ahora, ...prev, ...resto];
+      // Separar cola existente: lo de IA al final
+      const prevSolicitadas = prev.filter((c) => c.solicitado_por);
+      const prevIA = prev.filter((c) => !c.solicitado_por);
+
+      return [...ahora, ...prevSolicitadas, ...solicitadas, ...prevIA, ...resto];
     });
   }, []);
 
@@ -649,17 +654,9 @@ export function useDJ(config: UseDJConfig): UseDJReturn {
                 }]);
               }
 
-              // Las de priority=now van a la cola, el resto al buffer
-              const ahora = cancionesGroq.filter((c) => c.priority === 'now');
-              const resto = cancionesGroq.filter((c) => c.priority !== 'now');
-
-              if (ahora.length > 0) {
-                addToQueue(ahora);
-              }
-              if (resto.length > 0) {
-                setBuffer((prev) => [...prev, ...resto]);
-                log(`Buffer: +${resto.length} canciones del IA`);
-              }
+              // Solicitudes de usuarios SIEMPRE van a la cola (tienen prioridad sobre el buffer IA)
+              addToQueue(cancionesGroq);
+              log(`${cancionesGroq.length} canciones agregadas a la cola`);
             }
           }
         }
