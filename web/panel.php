@@ -969,18 +969,39 @@ function cargarLista(color, btn) {
 }
 
 // ── Cola ──
+function sourceBadge(s) {
+    if (s.requested_by) return '<span class="track-by">' + esc(s.requested_by).split('@')[0] + '</span>';
+    var r = (s.reason || '').toLowerCase();
+    if (r.indexOf('dorad') >= 0) return '<span class="badge badge-gold">Dorada</span>';
+    if (r.indexOf('direct') >= 0) return '<span class="badge badge-green">Directo</span>';
+    return '<span class="badge badge-white">IA</span>';
+}
 function cargarCola() {
     fetch('panel.php?ajax=queue').then(function(r){return r.json()}).then(function(d) {
         var qd=document.getElementById('queue-content'), bd=document.getElementById('buffer-content');
         if(!d.queue||!d.queue.length){qd.innerHTML='<p class="muted">Cola vacia</p>';}else{
             var h='<ul class="track-list">';d.queue.forEach(function(s,i){
                 var th=ytThumb(null,s.thumbnail_url||'');
-                h+='<li class="track-item"><span class="track-num">'+(i+1)+'</span><img class="track-thumb" src="'+th+'" alt="" onerror="this.src=thumbPlaceholder"><div class="track-info"><div class="track-name">'+esc(s.title)+(s.priority==='now'?' <span class="badge-priority">AHORA</span>':'')+'</div><div class="track-artist">'+esc(s.artist)+(s.requested_by?' <span class="track-by">'+esc(s.requested_by).split('@')[0]+'</span>':'')+'</div></div><div class="track-actions">'+(i>0?'<button class="track-btn" onclick="accionCola(\'move_up\','+i+',\'queue\')"><i class=\"icon icon-chevron-up\"></i></button>':'')+'<button class="track-btn danger" onclick="accionCola(\'remove\','+i+',\'queue\')"><i class=\"icon icon-x\"></i></button></div></li>';
+                h+='<li class="track-item"><span class="track-num">'+(i+1)+'</span>'
+                  +'<img class="track-thumb" src="'+th+'" alt="" onerror="this.src=thumbPlaceholder">'
+                  +'<div class="track-info"><div class="track-name">'+esc(s.title)
+                  +(s.priority==='now'?' <span class="badge-priority">AHORA</span>':'')
+                  +' '+sourceBadge(s)+'</div>'
+                  +'<div class="track-artist">'+esc(s.artist)+'</div></div>'
+                  +'<div class="track-actions">'
+                  +(i>0?'<button class="track-btn" onclick="accionCola(\'move_up\','+i+',\'queue\')"><i class=\"icon icon-chevron-up\"></i></button>':'')
+                  +'<button class="track-btn danger" onclick="accionCola(\'remove\','+i+',\'queue\')"><i class=\"icon icon-x\"></i></button></div></li>';
             });qd.innerHTML=h+'</ul>';}
         if(!d.buffer||!d.buffer.length){bd.innerHTML='<p class="muted">Buffer vacio</p>';}else{
             var h='<ul class="track-list">';d.buffer.forEach(function(s,i){
                 var th=ytThumb(null,s.thumbnail_url||'');
-                h+='<li class="track-item"><span class="track-num">'+(i+1)+'</span><img class="track-thumb faded" src="'+th+'" alt="" onerror="this.src=thumbPlaceholder"><div class="track-info"><div class="track-name secondary">'+esc(s.title)+'</div><div class="track-artist">'+esc(s.artist)+'</div></div><div class="track-actions"><button class="track-btn danger" onclick="accionCola(\'remove\','+i+',\'buffer\')"><i class=\"icon icon-x\"></i></button></div></li>';
+                h+='<li class="track-item"><span class="track-num">'+(i+1)+'</span>'
+                  +'<img class="track-thumb faded" src="'+th+'" alt="" onerror="this.src=thumbPlaceholder">'
+                  +'<div class="track-info"><div class="track-name secondary">'+esc(s.title)
+                  +' '+sourceBadge(s)+'</div>'
+                  +'<div class="track-artist">'+esc(s.artist)+'</div></div>'
+                  +'<div class="track-actions">'
+                  +'<button class="track-btn danger" onclick="accionCola(\'remove\','+i+',\'buffer\')"><i class=\"icon icon-x\"></i></button></div></li>';
             });bd.innerHTML=h+'</ul>';}
     });
 }

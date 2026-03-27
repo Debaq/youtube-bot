@@ -34,10 +34,17 @@ $pdo = db();
 run_migrations($pdo);
 $action = $_GET['action'] ?? '';
 
+// Leer body UNA sola vez (php://input solo se puede leer una vez)
+$_RAW_BODY = file_get_contents('php://input');
+$_JSON_INPUT = json_decode($_RAW_BODY, true);
+
 switch ($action) {
 
     // Obtener solicitudes pendientes de los usuarios
     case 'pending_requests':
+        // Expirar solicitudes viejas (>30 min)
+        $pdo->exec("UPDATE requests SET processed = 1 WHERE processed = 0 AND created_at < datetime('now', '-30 minutes')");
+
         $stmt = $pdo->query("
             SELECT r.id, r.texto, r.priority, r.created_at, u.email
             FROM requests r
@@ -47,12 +54,22 @@ switch ($action) {
                 CASE WHEN r.priority = 'now' THEN 0 ELSE 1 END,
                 r.created_at ASC
         ");
-        echo json_encode($stmt->fetchAll());
+        $rows = $stmt->fetchAll();
+
+        // Auto-marcar como procesadas al entregarlas (para que no se repitan si mark_processed falla)
+        if ($rows) {
+            $ids = array_column($rows, 'id');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $pdo->prepare("UPDATE requests SET processed = 1 WHERE id IN ($placeholders)")
+                ->execute(array_map('intval', $ids));
+        }
+
+        echo json_encode($rows);
         break;
 
     // Marcar solicitudes como procesadas
     case 'mark_processed':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $ids = $input['ids'] ?? [];
         if ($ids) {
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
@@ -64,7 +81,7 @@ switch ($action) {
 
     // Setear canción actual (la app Python informa qué está sonando)
     case 'now_playing':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $title = trim($input['title'] ?? '');
         $artist = trim($input['artist'] ?? '');
         $url = trim($input['url'] ?? '');
@@ -164,7 +181,7 @@ switch ($action) {
 
     // Registrar skip de canción
     case 'skip':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $song_id = (int)($input['song_id'] ?? 0);
         $reason = trim($input['reason'] ?? '');
 
@@ -278,7 +295,7 @@ switch ($action) {
 
     // Registrar reacción rápida
     case 'react':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $user_id = (int)($input['user_id'] ?? 0);
         $song_id = (int)($input['song_id'] ?? 0);
         $reaction = trim($input['reaction'] ?? '');
@@ -329,7 +346,7 @@ switch ($action) {
 
     // Guardar comentario de IA sobre canción actual
     case 'ai_comment':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $song_id = (int)($input['song_id'] ?? 0);
         $comment = trim($input['comment'] ?? '');
 
@@ -367,7 +384,7 @@ switch ($action) {
             key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $input = json_decode(file_get_contents('php://input'), true);
+            $input = $_JSON_INPUT;
             if (isset($input['volume'])) {
                 $vol = max(0, min(100, (int)$input['volume']));
                 $pdo->prepare("INSERT INTO bot_settings (key, value, updated_at) VALUES ('volume', ?, datetime('now'))
@@ -422,7 +439,7 @@ switch ($action) {
 
     // Python sincroniza su cola + buffer al DB
     case 'sync_queue':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $queue = $input['queue'] ?? [];
         $buffer = $input['buffer'] ?? [];
 
@@ -457,15 +474,25 @@ switch ($action) {
         echo json_encode(['ok' => true, 'queue' => count($queue), 'buffer' => count($buffer)]);
         break;
 
-    // Python lee acciones pendientes de la web
+    // Python/Tauri lee acciones pendientes de la web
     case 'pending_queue_actions':
         $stmt = $pdo->query("SELECT * FROM queue_actions WHERE processed = 0 ORDER BY id ASC");
-        echo json_encode($stmt->fetchAll());
+        $rows = $stmt->fetchAll();
+
+        // Auto-marcar como procesadas al entregarlas
+        if ($rows) {
+            $ids = array_column($rows, 'id');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $pdo->prepare("UPDATE queue_actions SET processed = 1 WHERE id IN ($placeholders)")
+                ->execute(array_map('intval', $ids));
+        }
+
+        echo json_encode($rows);
         break;
 
-    // Python marca acciones como procesadas
+    // Python/Tauri marca acciones como procesadas
     case 'mark_queue_actions':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $ids = $input['ids'] ?? [];
         if ($ids) {
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
@@ -477,7 +504,7 @@ switch ($action) {
 
     // Python guarda una playlist generada
     case 'save_playlist':
-        $input = json_decode(file_get_contents('php://input'), true);
+        $input = $_JSON_INPUT;
         $name = trim($input['name'] ?? '');
         $description = trim($input['description'] ?? '');
         $play_date = trim($input['play_date'] ?? '');
@@ -617,7 +644,7 @@ switch ($action) {
         )");
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $input = json_decode(file_get_contents('php://input'), true);
+            $input = $_JSON_INPUT;
             $schedule = $input['schedule'] ?? [];
             $pdo->exec("DELETE FROM dj_schedule");
             $stmt = $pdo->prepare("INSERT INTO dj_schedule (hour_start, hour_end, preset, day_of_week) VALUES (?, ?, ?, ?)");
